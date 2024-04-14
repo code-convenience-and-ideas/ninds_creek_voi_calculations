@@ -7,6 +7,27 @@ source(here::here("scripts", "00_key_variables.R"))
 # So, end up using some of the satellite imagery for prior
 # Assumptions to simply the problem significantly but could be explored further later
 ########################################################################################################################
+# Set stages being rerun
+
+# Flag whether we need to redo initial plots
+replot_site_relief_files <- (stage_to_start_from <= analysis_stages_vectors[1])
+
+# Flag if we need to rerun the carbon estimation through bluecam or not
+reestimate_carbon_sequestration <- (stage_to_start_from <= analysis_stages_vectors[2])
+
+# Flag need to redo bluecam plots
+replot_carbon_sequestration <- (stage_to_start_from <= analysis_stages_vectors[3])
+
+# Flag need to re-do initial prior characterisation
+restablish_priors <- (stage_to_start_from <= analysis_stages_vectors[4])
+
+# Flag need to redo voi analysis entirely
+recalculate_voi <- (stage_to_start_from <= analysis_stages_vectors[5])
+
+# Flag redoing the final voi plots
+redo_voi_outcome_plots <- (stage_to_start_from <= analysis_stages_vectors[6])
+
+########################################################################################################################
 #  Tidal height bounds are relatively arbitrary
 ########################################################################################################################
 
@@ -17,12 +38,15 @@ minimum_tidal_height_allowed <- 0.01
 step_size_in_tidal_height <- 0.05
 maximum_tidal_height_allowed <- 6.01 + step_size_in_tidal_height / 2
 
-# - in YAML
-actual_tidal_height_measurement <- 0.76 # mAHD of HAT as measure onsite which is 1.9M above the LAT
+# 0.76 in standard run
+actual_tidal_height_measurement <- model_params$`Mean tidal height onsite`$value
+
+# mAHD of HAT as measure onsite which is 1.9M above the LAT
 
 heighest_astronomical_tide_ahd <- 0.76
 
-tidal_range_onsite <- 1.9 # - in YAML
+# 1.9 in standard run
+tidal_range_onsite <- model_params$`Tidal range onsite`$value # - in YAML
 
 mean_tidal_height <- calculate_mean_tidal_height(
   heighest_astronomical_tide_ahd, tidal_range_onsite
@@ -55,17 +79,23 @@ n_inundation_opt <- length(inundation_value_sequence)
 n_tidal_range_opt <- length(tidal_range_hypotheses)
 
 ########## Values used to add the financial element
-cattle_revenue_per_hectare_per_year <- 976.8 # - in YAML
+# baseline was 976.8
+cattle_revenue_per_hectare_per_year <- model_params$`Baseline cattle revenue`$value # - in YAML
 
-cattle_revenue_fraction_step <- 0.1
+# number of steps to fractions
+number_of_revenue_options <- model_params$`Number of cattle revenue options`$value
+
+cattle_revenue_fraction_step <- 1 / number_of_revenue_options
+
+# fractions to get fuller scenarios
 cattle_revenue_per_hectare_options <- seq(
   cattle_revenue_fraction_step,
   1,
   cattle_revenue_fraction_step
 ) * cattle_revenue_per_hectare_per_year
 
-accu_price_step_size <- 5
-accu_price_max_considered <- 150
+accu_price_step_size <- model_params$`Steps between considered carbon prices`$value  # 5 baseline
+accu_price_max_considered <- model_params$`Maximum carbon price considered`$value # 150 baseline
 
 accu_considered_matrix_prices <- seq(
   accu_price_step_size, # - in YAML
@@ -80,7 +110,7 @@ accu_considered_matrix_prices <- seq(
 # Set up paths for output items in this analysis reused elsewhere
 raster_tibble_storage_path <- file.path(processeddata_dir, 'rasters_in_tibble.rds')
 
-if (stage_to_start_from <= analysis_stages_vectors[1]) {
+if (replot_site_relief_files) {
     # Plot an overlaid raster + shapefile plot of the site for my reference
     site_elevation_plot_with_boundaries <- raster_and_shape_plot(raster_image, area_shape_files) +
         labs(fill = "Elevation compared to sea level (m)",
@@ -193,7 +223,7 @@ grazing_land_scenario_name <- c(
 reduced_land_section_path <- file.path(processeddata_dir, 'reducing_grazing_land_section.parquet')
 enumerated_grazing_land_path <- file.path(processeddata_dir, 'reducing_frazing_land_section.parquet')
 
-if (stage_to_start_from <= analysis_stages_vectors[1]) {
+if (replot_site_relief_files) {
 
     # Build a simple reduced section for plotting against some carbon scenarios
     grazing_land_reduced_selection <- tibble::tibble(
@@ -266,8 +296,7 @@ blue_cam_model_excel_original_path <- file.path(synthesised_data_dir, "The blue 
 blue_cam_model_excel_copy_path <- stringr::str_replace(blue_cam_model_excel_original_path, ".xlsx", " - copy.xlsx")
 file.copy(blue_cam_model_excel_original_path, blue_cam_model_excel_copy_path)
 
-# Flag if we need to rerun the carbon estimation through bluecam or not
-reestimate_carbon_sequestration <- (stage_to_start_from <= analysis_stages_vectors[2])
+
 
 # Tutorial examples for interacting with excel client:
 # https://www.r-bloggers.com/2021/07/rdcomclient-read-and-write-excel-and-call-vba-macro-in-r/
@@ -446,7 +475,7 @@ if (reestimate_carbon_sequestration) {
   cea_results_over_tidal_differences <- readxl::read_xlsx(cea_tidal_results_file_path)
 }
 
-if (stage_to_start_from <= analysis_stages_vectors[3]) {
+if (replot_carbon_sequestration) {
     cea_total_carbon_abatement_series <- cea_results_over_tidal_differences |>
       dplyr::filter(measure_type == "Total") |>
       dplyr::group_by(`CEA number`, `Tidal range`) |>
@@ -762,607 +791,635 @@ scenario_inundation_uncertainty <- c(2, 2, 1, 1, 4)
 # overall site area as 78.87309
 # grazing area as 56.16916
 # reference cattle revenue per year as 976.8
-actual_cea_values_in_tidal_scenario <- (
-    overall_results_over_tidal_differences$`Total hectares in CEAs` |>
-        array(dim = tidal_range_actual_array_dim))
-
-inundation_sequence_matrix <- (inundation_value_sequence |>
-  array(dim = inundation_actual_array_dim))
-
-carbon_abatement_in_tidal_scenario <- unname(overall_results_over_tidal_differences$`Net abatement amount (Ar) (Tonnes CO2e)`)
-
-reweighting_factors_of_cea_weight <- (1 / actual_cea_values_in_tidal_scenario[one_array(n_inundation_opt), ]) * inundation_sequence_matrix[, one_array(n_tidal_range_opt)]
-
-fraction_of_site_flooded <- pmin(inundation_sequence_matrix / total_site_area, 1)
-fraction_site_site_not_flooded <- 1 - fraction_of_site_flooded
-
-# Combined the reweighted carbon sinks with the scenario reweights
-reweighted_scenario_carbon_sink <- array(carbon_abatement_in_tidal_scenario, dim = tidal_range_actual_array_dim)[one_array(n_inundation_opt), ] * reweighting_factors_of_cea_weight
-
-# Uses theoretical inundation to calculate the cattle revenue inputs and so-on
-decision_ordering <- c("Use for grazing land", "Use for carbon sequestration")
-
-cattle_revenue_scenario_results <- list()
-cattle_prior_decision_payoff <- list()
-for (revenue_option in cattle_revenue_per_hectare_options) {
-  cattle_revenue_key <- paste(revenue_option)
-
-  cattle_revenue_scenario_results[[cattle_revenue_key]] <- list()
-
-  # calculate the values needed
-  cattle_inundation_scenario_revenue <- (fraction_site_site_not_flooded *
-    grazing_site_rea *
-    revenue_option)
-
-  cattle_full_scenario_revenue_matrix <- array(cattle_inundation_scenario_revenue,
-    dim = inundation_actual_array_dim
-  )[, one_array(n_tidal_range_opt)]
-
-  cattle_revenue_joint_decision_payoff <- sum(cattle_full_scenario_revenue_matrix * prior_joint_distribution)
-
-  expected_cattle_payoff_in_every_sample_scenario <- array(
-    cattle_full_scenario_revenue_matrix,
-    dim = actual_dist_array_dim
-  )[one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ]
-
-  # Save the results out
-  cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_revenue"]] <- (
-      cattle_inundation_scenario_revenue
-  )
-
-  cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]] <- (
-      cattle_full_scenario_revenue_matrix
-  )
-
-  cattle_revenue_scenario_results[[cattle_revenue_key]][["joint_payoff"]] <- (
-      cattle_revenue_joint_decision_payoff
-  )
-
-  cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_payoff"]] <- (
-    expected_cattle_payoff_in_every_sample_scenario
-  )
-
-  cattle_prior_decision_payoff[[cattle_revenue_key]] <- cattle_revenue_joint_decision_payoff
-}
-
-# Hopefully belows adjustment will cut runtime by >30% as would move one expensive calculation out of innermost loop
-latest_real_carbon_price_estimate <- 33.8
-accu_price_sequence_with_latest <- sort(c(accu_considered_matrix_prices, latest_real_carbon_price_estimate))
-
-# Calculate expected payoff for carbon in prior belief scenario at carbon price
-carbon_decision_payoff <- list()
-carbon_scenario_revenue <- list()
-for (current_carbon_price in accu_price_sequence_with_latest) {
-    # Key for storing results
-    current_price_key <- paste(current_carbon_price)
-    carbon_revenue_for_scenario <- reweighted_scenario_carbon_sink * current_carbon_price / permancence_period_years
-
-    carbon_payoff_at_price <- sum(prior_joint_distribution * carbon_revenue_for_scenario)
-
-    carbon_decision_payoff[[current_price_key]] <- carbon_payoff_at_price
-    carbon_scenario_revenue[[current_price_key]] <- carbon_revenue_for_scenario
-}
-
-# Calculate expected payoff for cattle in prior belief scenario at cattle revenue estimate
-# Done slightly earlier with other cattle payoff calcs
-decision_summary_in_price_scenario <- list()
-best_prior_decision_in_scenario <- list()
-evpi_in_scenario <- list()
-best_prior_payoff_in_scenario <- list()
-
-for (current_carbon_price in accu_price_sequence_with_latest) {
-    # Key for storing results
-    current_price_key <- paste(current_carbon_price)
-
-    # Pull out pre-calculated carbon scenario data
-    carbon_revenue_for_scenario <- carbon_scenario_revenue[[current_price_key]]
-    carbon_prior_payoff <- carbon_decision_payoff[[current_price_key]]
-
-    # Set up list for extra decision summary vairables
-    decision_summary_in_price_scenario[[current_price_key]] <- list()
-    best_prior_decision_in_scenario[[current_price_key]] <- list()
-    evpi_in_scenario[[current_price_key]] <- list()
-    best_prior_payoff_in_scenario[[current_price_key]] <- list()
-
-
-    for (revenue_option in cattle_revenue_per_hectare_options) {
-        cattle_revenue_key <- paste(revenue_option)
-
-        # Log a result
-        flog.info(glue::glue("Starting pre-calc for: ${current_price_key} ACCU, ${cattle_revenue_key} Cattle"))
-
-        # Pull out the pre-calculated cattle scenario data
-        cattle_full_scenario_revenue_matrix <- cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]]
-
-        # Could separate out the cattle payment loop and carbon payment loop as well for prior payments
-        full_reveneue_pricing_comparisons <- array(
-            c(
-                cattle_full_scenario_revenue_matrix,
-                carbon_revenue_for_scenario
-            ),
-            dim = c(dim(cattle_full_scenario_revenue_matrix), 2)
-        )
-
-        # Expected Decision
-        cattle_prior_payoff <- cattle_prior_decision_payoff[[cattle_revenue_key]]
-
-        # break-even price comparison
-        break_even_carbon_price_in_prior <- (cattle_prior_payoff / carbon_prior_payoff * current_carbon_price)
-
-        # Value of perfect information
-        # Could move EVPI outside of the scenario loops
-        best_decision_payoff <- (apply(
-            full_reveneue_pricing_comparisons,
-            c(1, 2), max
-        ) * prior_joint_distribution) |> sum()
-        best_decision_index_group <- apply(full_reveneue_pricing_comparisons, c(1, 2), function(x) decision_ordering[which.max(x)])
-
-        # Raw split of decisions + prob_weighted split of decisions
-        best_decision_scenario_count <- data.frame(
-            best_decision = c(best_decision_index_group),
-            decision_weight = c(prior_joint_distribution),
-            count = 1 / length(best_decision_index_group)
-        )
-
-        # Finalise outputs for key metrics
-        combined_prior_payoffs_vec <- c(cattle_prior_payoff, carbon_prior_payoff)
-        prior_value_best_payoff <- pmax(combined_prior_payoffs_vec)
-        value_of_perfect_information <- best_decision_payoff - prior_value_best_payoff
-        best_prior_decision <- decision_ordering[which.max(combined_prior_payoffs_vec)]
-
-        # Store the various output values from the calculations
-        decision_summary_in_price_scenario[[current_price_key]][[cattle_revenue_key]] <- (
-            best_decision_scenario_count |>
-                dplyr::group_by(best_decision) |>
-                dplyr::summarise(
-                    `Prob weighted decision rate` = sum(decision_weight),
-                    `Raw scenario decision rate` = sum(count)
-                ) |>
-                dplyr::mutate(
-                    `Carbon price ($ / tonne)` = current_carbon_price,
-                    `Reference cattle revenue` = revenue_option,
-                    `Break even carbon price on prior` = break_even_carbon_price_in_prior
-                )
-        )
-
-        best_prior_decision_in_scenario[[current_price_key]][[cattle_revenue_key]] <- best_prior_decision
-        evpi_in_scenario[[current_price_key]][[cattle_revenue_key]] <- value_of_perfect_information
-        best_prior_payoff_in_scenario[[current_price_key]][[cattle_revenue_key]] <- prior_value_best_payoff
-    }
-}
-
-# Calculate the value of perfect information across each pairing of possible carbon pricing + cattle pricing
-
-# Go into the samples then to work out sample information
-
-
-
-
-# Actual outcome determines payoff not sample estimate -> cast dimension to actual and then replicate across all sample values
-# loop for one specific value
-scenario_key_graphs <- list()
-scenario_key_data <- list()
-
-for (scenario_id in (seq(sampling_scenario_order))) {
-  scenario_name_key <- sampling_scenario_order[scenario_id]
-
-  cur_tidal_measurement_bias <- scenario_tidal_measurement_bias[scenario_id]
-  cur_tidal_measurement_uncertainty <- scenario_tidal_measurement_uncertainty[scenario_id]
-  cur_inundation_bias <- scenario_inundation_bias[scenario_id]
-  cur_inundation_uncertainty <- scenario_inundation_uncertainty[scenario_id]
-
-  # Get the two condition sample matrices
-  sample_tidal_beliefs_given_tidal_actual <- sapply(
-    tidal_range_hypotheses,
-    function(x) {
-      calc_tidal_range_belief(
-        x + cur_tidal_measurement_bias,
-        cur_tidal_measurement_uncertainty
-      )
-    }
-  )
-
-  sample_inundation_beliefs_given_inundation_actual <- sapply(
-    inundation_value_sequence,
-    function(x) {
-      calc_inundation_range_belief(
-        x + cur_inundation_bias,
-        cur_inundation_uncertainty
-      )
-    }
-  )
-
-  # Plot both as heat maps
-  tidal_range_sample_heatmap <- joint_straight_to_heatmap(
-    sample_tidal_beliefs_given_tidal_actual,
-    tidal_range_hypotheses,
-    tidal_range_hypotheses,
-    "Sampled tidal range (m)",
-    "Actual tidal range (m)"
-  ) +
-    geom_abline(intercept = 0, slope = 1, colour = "red")
-
-  inundation_sample_heatmap <- joint_straight_to_heatmap(
-    sample_inundation_beliefs_given_inundation_actual,
-    inundation_value_sequence,
-    inundation_value_sequence,
-    "Sampled inundation (hectares)",
-    "Actual inundation (hectares)"
-  ) +
-    geom_abline(intercept = 0, slope = 1, colour = "red")
-
-  sample_distributions_of_outcomes <- plot_grid(tidal_range_sample_heatmap, inundation_sample_heatmap,
-    labels = c(
-      "A) Sample distribution given actual tidal range",
-      "B) Sample distribution of inundation given actual inundation"
-    )
-  )
-
-  scenario_joint_heatmap_path <- file.path(
-      figures_dir,
-      paste(scenario_name_key, "conditional_sample_distribution.png", sep = "_"))
-  save_plot(scenario_joint_heatmap_path, sample_distributions_of_outcomes)
-
-
-  # Now expand out every inundation, tidal range pair and then our belief from that join distribution
-  # 83 121  83 121 - swapping over to array logic
-  # Build the sample distribution join
-  inundation_belief_reshape <- sample_inundation_beliefs_given_inundation_actual |>
-    array(dim = full_indundation_array_dim)
-
-  tidal_range_belief_reshape <- sample_tidal_beliefs_given_tidal_actual |>
-    array(dim = full_tidal_range_array_dim)
-
-  # Dependent on assumption from the prior belief
-  full_conditioned_sample_distribution <- (
-      inundation_belief_reshape[,
-                                one_array(n_tidal_range_opt),
-                                ,
-                                one_array(n_tidal_range_opt)] *
-
-      tidal_range_belief_reshape[one_array(n_inundation_opt),
-                                 ,
-                                 one_array(n_inundation_opt),
-                                 ])
-
-  # Should all be ones for this test
-  # conditional_sample_distribution_test <- full_conditioned_sample_distribution |> apply(MARGIN=c(3, 4), sum)
-  # all.equal(conditional_sample_distribution_test, array(1, dim=c(n_inundation_opt, n_tidal_range_opt)))
-  full_joint_sample_actual_distribution <- (full_conditioned_sample_distribution *
-                                                array(prior_joint_distribution, dim = actual_dist_array_dim)[
-                                                    one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ])
-
-  # Recover the prior distribution joint values - should pass
-  # all.equal(prior_joint_distribution, apply(full_joint_sample_actual_distribution, MARGIN=c(3, 4), sum))
-
-  # Recover's actual joint
-
-  # Work out the chance of seeing some sample result for inundation and tidal range
-  joint_sample_distribution_array <- full_joint_sample_actual_distribution |>
-    apply_and_retain_sample_dims(sum) |>
-    array(dim = sample_dist_array_dim)
-
-  implied_sample_tidal_range_prob <- joint_sample_distribution_array |> apply(MARGIN = c(2), FUN = sum)
-  implied_inundation_tidal_range_prob <- joint_sample_distribution_array |> apply(MARGIN = c(1), FUN = sum)
-
-  sample_conditional_contrast <- joint_sample_distribution_array[, , 1, 1] /
-    array(implied_sample_tidal_range_prob, dim = tidal_range_actual_array_dim)[one_array(n_inundation_opt), ]
-
-  # Some nice sample distribution plots
-  expected_sample_results_joint_heatmap <- joint_straight_to_heatmap(
-    joint_sample_distribution_array[, , 1, 1],
-    inundation_value_sequence,
-    tidal_range_hypotheses,
-    "Sampled inundation (hectares)",
-    "Sampled Tidal Height"
-  )
-
-  expected_cond_sample_results_joint_heatmap <- joint_straight_to_heatmap(
-    sample_conditional_contrast,
-    inundation_value_sequence,
-    tidal_range_hypotheses,
-    "Sampled inundation (hectares)",
-    "Sampled Tidal Height"
-  )
-
-
-  inundation_estimate_plot <- simple_belief_df(
-    joint_sample_distribution_array |> apply(MARGIN = c(1), FUN = sum),
-    inundation_value_sequence
-  ) |>
-    dplyr::rename("Estimated inundated land (Hectares)" = "target_value") |>
-    simple_univariate_belief_bar("Estimated inundated land (Hectares)", "belief")
-
-  tidal_range_estimate_plot <- simple_belief_df(
-    joint_sample_distribution_array |> apply(MARGIN = c(2), FUN = sum),
-    tidal_range_hypotheses
-  ) |>
-    dplyr::rename("Estimated tidal range (m)" = "target_value") |>
-    simple_univariate_belief_bar("Estimated tidal range (m)", "belief")
-
-  sample_distributions_of_outcomes <- cowplot::plot_grid(tidal_range_sample_heatmap, inundation_sample_heatmap,
-    tidal_range_estimate_plot, inundation_estimate_plot,
-    expected_sample_results_joint_heatmap,
-    expected_cond_sample_results_joint_heatmap,
-    labels = c(
-      "A) Tidal: Sample given actual",
-      "B) Inundation: Sample given actual",
-      "C) Tidal: sample dist",
-      "D) Inundation: Sample dist",
-      "E) Tidal+Inundation: Joint sample dist",
-      "F) Indundation+Tidal: Sample given sample"
-    ),
-    ncol = 2,
-    label_size = 16,
-    label_y = 1.02,
-    label_x = -0.1,
-    hjust = -0.5
-  )
-
-  implied_joint_sample_distribution_path <- file.path(
-      figures_dir,
-      paste(scenario_name_key, "sample_distribution_summary.png", sep = "_")
-      )
-
-  save_plot(
-      implied_joint_sample_distribution_path,
-      sample_distributions_of_outcomes,
-      base_height = 9, base_width = 12
-  )
-
-  # Combined prior sample
-  posterior_probability_distribution <- replace_matrix_nans(
-      full_joint_sample_actual_distribution /
-          joint_sample_distribution_array[, , one_array(n_inundation_opt), one_array(n_tidal_range_opt)])
-
-  # Check all conditional distributions sum to 1
-  # all.equal(posterior_probability_distribution |> apply(MARGIN=c(1, 2), FUN=sum), array(1, dim=c(n_inundation_opt, n_tidal_range_opt)))
-
-  # For every theoretical ACCU price and cattle revenue price, calculate utility, EVPI, and EVSI
-
-  # Reshape sample joint distribution
-  reshaped_joint_sample_distribution <- array(joint_sample_distribution_array, dim = sample_dist_array_dim)
-  complete_full_reshaped_joint_sample_dist_array <- reshaped_joint_sample_distribution[, , one_array(n_inundation_opt), one_array(n_tidal_range_opt)]
-
-  # Use the calculated distributions to now do all of the value of information estimates
-
-  # best_prior_decision_in_scenario <- list()
-  # prior_decision_utility <- list()
-  # accu_scenario_evpi <- list()
-  # accu_scenario_evsi <- list()
-  scenario_key_metrics <- list()
-  decision_summary_in_perfect_scenario <- list()
-
-  for (current_carbon_price in accu_price_sequence_with_latest) {
-    # Key for storing results
-    current_price_key <- paste(current_carbon_price)
-    carbon_revenue_for_scenario <- reweighted_scenario_carbon_sink * current_carbon_price / permancence_period_years
-
-    flog.info(glue::glue("Starting calculations for ${current_price_key}ACCU"))
-
-    # Add the next layer of access to my lists
-    scenario_key_metrics[[current_price_key]] <- list()
-    decision_summary_in_perfect_scenario[[current_price_key]] <- list()
-
-    for (cattle_revenue_per_hectare in cattle_revenue_per_hectare_options) {
-      # Key for storing results
-      cattle_revenue_key <- paste(cattle_revenue_per_hectare)
-
-      flog.info(glue::glue("Starting: ${current_price_key} ACCU, ${cattle_revenue_key} Cattle"))
-
-      # Pull out the pre-calculated cattle scenario data
-      cattle_inundation_scenario_revenue <- cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_revenue"]]
-      cattle_full_scenario_revenue_matrix <- cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]]
-      cattle_revenue_joint_decision_payoff <- cattle_revenue_scenario_results[[cattle_revenue_key]][["joint_payoff"]]
-      expected_cattle_payoff_in_every_sample_scenario <- cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_payoff"]]
-
-
-      # Could separate out the cattle payment loop and carbon payment loop as well for prior payments
-      full_reveneue_pricing_comparisons <- array(
-        c(
-          cattle_full_scenario_revenue_matrix,
-          carbon_revenue_for_scenario
-        ),
-        dim = c(dim(cattle_full_scenario_revenue_matrix), 2)
-      )
-
-      # Expected Decision
-      decision_payoff_overall <- (full_reveneue_pricing_comparisons *
-                                      array(prior_joint_distribution,
-                                            dim = c(dim(prior_joint_distribution), 1))[, , one_array(2)])
-      |> apply(MARGIN = c(3), sum)
-      break_even_carbon_price_in_prior <- (decision_payoff_overall[1] / decision_payoff_overall[2] * current_carbon_price)
-
-
-      # Value of perfect information
-      # Could move EVPI outside of the scenario loops
-      best_decision_payoff <- (apply(
-        full_reveneue_pricing_comparisons,
-        c(1, 2), max
-      ) * prior_joint_distribution) |> sum()
-      best_decision_index_group <- apply(full_reveneue_pricing_comparisons, c(1, 2), function(x) decision_ordering[which.max(x)])
-
-      # Raw split of decisions + prob_weighted split of decisions
-      best_decision_scenario_count <- data.frame(
-        best_decision = c(best_decision_index_group),
-        decision_weight = c(prior_joint_distribution),
-        count = 1 / length(best_decision_index_group)
-      )
-
-      value_of_perfect_information <- best_decision_payoff - max(decision_payoff_overall)
-
-      # Do value of sample information calculations
-      # For each sample scenario, best decision after calculations
-      carbon_payoff_sample_scenarios <- array(carbon_revenue_for_scenario, dim = c(1, 1, dim(carbon_revenue_for_scenario)))[one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ]
-
-      carbon_sample_scenario_expected_payoff <- (carbon_payoff_sample_scenarios * posterior_probability_distribution) |> apply(., c(1, 2), sum)
-      cattle_sample_scenario_expected_payoff <- (expected_cattle_payoff_in_every_sample_scenario * posterior_probability_distribution) |> apply(., c(1, 2), sum)
-
-      sample_overall_payoff_across_multiple_samples <- (pmax(carbon_sample_scenario_expected_payoff, cattle_sample_scenario_expected_payoff) * joint_sample_distribution_array[, , 1, 1]) |> sum()
-
-      expected_value_of_sample_information <- sample_overall_payoff_across_multiple_samples - max(decision_payoff_overall)
-
-      # Store the final values of the calculations
-      best_prior_decision <- decision_ordering[which.max(decision_payoff_overall)]
-      expected_annual_payoff_on_prior <- max(decision_payoff_overall)
-
-      key_voi_metrics_for_scenario <- tibble(
-        `Cattle revenue ($ / He / yr)` = cattle_revenue_per_hectare,
-        `Carbon price ($ / tonne)` = current_carbon_price,
-        `Best Prior decision landuse` = best_prior_decision,
-        `Expected annualised payoff on prior decision` = expected_annual_payoff_on_prior,
-        `Value of perfect information` = value_of_perfect_information,
-        `Value of sample information` = expected_value_of_sample_information,
-        `Sampling Scenario` = scenario_name_key
-      )
-
-
-      scenario_key_metrics[[current_price_key]][[cattle_revenue_key]] <- (
-        key_voi_metrics_for_scenario
-      )
-
-      decision_summary_in_perfect_scenario[[current_price_key]][[cattle_revenue_key]] <- (
-        best_decision_scenario_count |>
-          dplyr::group_by(best_decision) |>
-          dplyr::summarise(
-            `Prob weighted decision rate` = sum(decision_weight),
-            `Raw scenario decision rate` = sum(count)
-          ) |>
-          dplyr::mutate(
-            `Carbon price ($ / tonne)` = current_carbon_price,
-            `Reference cattle revenue` = cattle_revenue_per_hectare
-          )
-      )
-    }
-  }
-
-  # Combine some results for each pricing scenario now
-  combined_scenario_results <- scenario_key_metrics |>
-    lapply(dplyr::bind_rows) |>
-    dplyr::bind_rows()
-
-  # Visualise the combined results
-  colour_scale_limits_viridis_c <- tidal_range_carbon_price_scenarios$`Annualised Site revenue` |>
-    min_max_vec()
-
-  value_of_information_scale_bounds <- c(combined_scenario_results$`Value of perfect information`, combined_scenario_results$`Value of sample information`, 0) |>
-    min_max_vec()
-
-  long_form_value_of_information <- combined_scenario_results |>
-    dplyr::select(
-      `Carbon price ($ / tonne)`,
-      `Value of perfect information`,
-      `Value of sample information`
-    ) |>
-    pivot_longer(-`Carbon price ($ / tonne)`, names_to = "Measure", values_to = "Value")
-
-  voi_heatmap <- long_form_value_of_information |>
-    ggplot2::ggplot(aes(x = `Carbon price ($ / tonne)`, y = Measure, fill = Value)) +
-      ggplot2::geom_tile(colour = "Black") +
-      ggplot2::theme_cowplot() +
-      ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(n = 7), labels = scales::number_format()) +
-      ggplot2::scale_fill_viridis_c()
-
-  scenario_voi_heatmap_path <- file.path(figures_dir, paste(scenario_name_key, "heatmap_of_voi_values.png", sep = "_"))
-  ggplot2::ggsave(scenario_voi_heatmap_path, voi_heatmap)
-
-  combined_scenario_results_output_path <- file.path(
-      synthesised_data_dir,
-      paste(scenario_name_key, "event_scenarios_first_case.xlsx", sep = "_"))
-
-  writexl::write_xlsx(
-    combined_scenario_results,
-    combined_scenario_results_output_path
-  )
-
-  # Share out the results
-  scenario_key_data[[scenario_name_key]] <- combined_scenario_results
-  scenario_key_graphs[[scenario_name_key]] <- voi_heatmap
-}
-
-# Combine and plot full scenario shared results
-# Payoff in and certainty of decision in every scenario
-# "Middle complexity" -> "Moderate complexity"
-full_scenario_voi_data <- scenario_key_data |>
-  bind_rows()
-
 complete_scenario_data_path <- file.path(synthesised_data_dir, "combined_scenario_grazing_comparison.xlsx")
-full_scenario_voi_data |>
-  writexl::write_xlsx(
-      complete_scenario_data_path
-  )
+if (recalculate_voi){
 
-perfect_information_long_form <- full_scenario_voi_data |>
-  dplyr::filter(`Cattle revenue ($ / He / yr)` == cattle_revenue_per_hectare_per_year) |>
-  dplyr::select(
-    `Carbon price ($ / tonne)`,
-    `Value of perfect information`
-  ) |>
-  tidyr::pivot_longer(`Value of perfect information`, names_to = "Sampling Scenario", values_to = "Financial Value ($)")
+    actual_cea_values_in_tidal_scenario <- (
+        overall_results_over_tidal_differences$`Total hectares in CEAs` |>
+            array(dim = tidal_range_actual_array_dim))
 
-sample_scenario_long_form <- full_scenario_voi_data |>
-  dplyr::filter(`Cattle revenue ($ / He / yr)` == cattle_revenue_per_hectare_per_year) |>
-  dplyr::select(
-    `Carbon price ($ / tonne)`,
-    `Value of sample information`,
-    `Sampling Scenario`
-  ) |>
-  dplyr::mutate(`Sampling Scenario` = paste("Value of ", `Sampling Scenario`, " sample information", sep = "")) |>
-  dplyr::rename("Financial Value ($)" = "Value of sample information")
+    inundation_sequence_matrix <- (inundation_value_sequence |>
+      array(dim = inundation_actual_array_dim))
+
+    carbon_abatement_in_tidal_scenario <- unname(overall_results_over_tidal_differences$`Net abatement amount (Ar) (Tonnes CO2e)`)
+
+    reweighting_factors_of_cea_weight <- (1 / actual_cea_values_in_tidal_scenario[one_array(n_inundation_opt), ]) * inundation_sequence_matrix[, one_array(n_tidal_range_opt)]
+
+    fraction_of_site_flooded <- pmin(inundation_sequence_matrix / total_site_area, 1)
+    fraction_site_site_not_flooded <- 1 - fraction_of_site_flooded
+
+    # Combined the reweighted carbon sinks with the scenario reweights
+    reweighted_scenario_carbon_sink <- array(carbon_abatement_in_tidal_scenario, dim = tidal_range_actual_array_dim)[one_array(n_inundation_opt), ] * reweighting_factors_of_cea_weight
+
+    # Uses theoretical inundation to calculate the cattle revenue inputs and so-on
+    decision_ordering <- c("Use for grazing land", "Use for carbon sequestration")
+
+    cattle_revenue_scenario_results <- list()
+    cattle_prior_decision_payoff <- list()
+    for (revenue_option in cattle_revenue_per_hectare_options) {
+      cattle_revenue_key <- paste(revenue_option)
+
+      cattle_revenue_scenario_results[[cattle_revenue_key]] <- list()
+
+      # calculate the values needed
+      cattle_inundation_scenario_revenue <- (fraction_site_site_not_flooded *
+        grazing_site_rea *
+        revenue_option)
+
+      cattle_full_scenario_revenue_matrix <- array(cattle_inundation_scenario_revenue,
+        dim = inundation_actual_array_dim
+      )[, one_array(n_tidal_range_opt)]
+
+      cattle_revenue_joint_decision_payoff <- sum(cattle_full_scenario_revenue_matrix * prior_joint_distribution)
+
+      expected_cattle_payoff_in_every_sample_scenario <- array(
+        cattle_full_scenario_revenue_matrix,
+        dim = actual_dist_array_dim
+      )[one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ]
+
+      # Save the results out
+      cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_revenue"]] <- (
+          cattle_inundation_scenario_revenue
+      )
+
+      cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]] <- (
+          cattle_full_scenario_revenue_matrix
+      )
+
+      cattle_revenue_scenario_results[[cattle_revenue_key]][["joint_payoff"]] <- (
+          cattle_revenue_joint_decision_payoff
+      )
+
+      cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_payoff"]] <- (
+        expected_cattle_payoff_in_every_sample_scenario
+      )
+
+      cattle_prior_decision_payoff[[cattle_revenue_key]] <- cattle_revenue_joint_decision_payoff
+    }
+
+    # Hopefully belows adjustment will cut runtime by >30% as would move one expensive calculation out of innermost loop
+    latest_real_carbon_price_estimate <- 33.8
+    accu_price_sequence_with_latest <- sort(c(accu_considered_matrix_prices, latest_real_carbon_price_estimate))
+
+    # Calculate expected payoff for carbon in prior belief scenario at carbon price
+    carbon_decision_payoff <- list()
+    carbon_scenario_revenue <- list()
+    carbon_scenario_revenue_sample_dist <- list()
+    for (current_carbon_price in accu_price_sequence_with_latest) {
+        # Key for storing results
+        current_price_key <- paste(current_carbon_price)
+        carbon_revenue_for_scenario <- reweighted_scenario_carbon_sink * current_carbon_price / permancence_period_years
+
+        carbon_payoff_at_price <- sum(prior_joint_distribution * carbon_revenue_for_scenario)
+
+        carbon_decision_payoff[[current_price_key]] <- carbon_payoff_at_price
+        carbon_scenario_revenue[[current_price_key]] <- carbon_revenue_for_scenario
+        carbon_scenario_revenue_sample_dist[[current_price_key]] <- (
+            array(carbon_revenue_for_scenario,
+                  dim = c(1, 1, dim(carbon_revenue_for_scenario)))
+            [one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ])
+    }
+
+    # Calculate expected payoff for cattle in prior belief scenario at cattle revenue estimate
+    # Done slightly earlier with other cattle payoff calcs
+
+    # Calculate the value of perfect information across each pairing of possible carbon pricing + cattle pricing
+    decision_summary_in_price_scenario <- list()
+    best_prior_decision_in_scenario <- list()
+    evpi_in_scenario <- list()
+    best_prior_payoff_in_scenario <- list()
+
+    for (current_carbon_price in accu_price_sequence_with_latest) {
+        # Key for storing results
+        current_price_key <- paste(current_carbon_price)
+
+        # Pull out pre-calculated carbon scenario data
+        carbon_revenue_for_scenario <- carbon_scenario_revenue[[current_price_key]]
+        carbon_prior_payoff <- carbon_decision_payoff[[current_price_key]]
+
+        # Set up list for extra decision summary vairables
+        decision_summary_in_price_scenario[[current_price_key]] <- list()
+        best_prior_decision_in_scenario[[current_price_key]] <- list()
+        evpi_in_scenario[[current_price_key]] <- list()
+        best_prior_payoff_in_scenario[[current_price_key]] <- list()
 
 
-voi_cases_to_exclude <- c("high tidal uncertainty, confident inundation", "low tidal uncertainty, uncertain inundation")
+        for (revenue_option in cattle_revenue_per_hectare_options) {
+            cattle_revenue_key <- paste(revenue_option)
 
-combined_cases_scenario_evaluation <- dplyr::bind_rows(
-  sample_scenario_long_form,
-  perfect_information_long_form
-) |>
-  dplyr::mutate(`Measure type` = case_when(str_detect(`Sampling Scenario`, "sample") ~ "Sample", TRUE ~ "Perfect"))
+            # Log a result
+            flog.info(glue::glue("Starting pre-calc for: ${current_price_key} ACCU, ${cattle_revenue_key} Cattle"))
+
+            # Pull out the pre-calculated cattle scenario data
+            cattle_full_scenario_revenue_matrix <- cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]]
+
+            # Could separate out the cattle payment loop and carbon payment loop as well for prior payments
+            full_reveneue_pricing_comparisons <- array(
+                c(
+                    cattle_full_scenario_revenue_matrix,
+                    carbon_revenue_for_scenario
+                ),
+                dim = c(dim(cattle_full_scenario_revenue_matrix), 2)
+            )
+
+            # Expected Decision
+            cattle_prior_payoff <- cattle_prior_decision_payoff[[cattle_revenue_key]]
+
+            # break-even price comparison
+            break_even_carbon_price_in_prior <- (cattle_prior_payoff / carbon_prior_payoff * current_carbon_price)
+
+            # Value of perfect information
+            # Could move EVPI outside of the scenario loops
+            best_decision_payoff <- (apply(
+                full_reveneue_pricing_comparisons,
+                c(1, 2), max
+            ) * prior_joint_distribution) |> sum()
+            best_decision_index_group <- apply(full_reveneue_pricing_comparisons, c(1, 2), function(x) decision_ordering[which.max(x)])
+
+            # Raw split of decisions + prob_weighted split of decisions
+            best_decision_scenario_count <- data.frame(
+                best_decision = c(best_decision_index_group),
+                decision_weight = c(prior_joint_distribution),
+                count = 1 / length(best_decision_index_group)
+            )
+
+            # Finalise outputs for key metrics
+            combined_prior_payoffs_vec <- c(cattle_prior_payoff, carbon_prior_payoff)
+            prior_value_best_payoff <- max(combined_prior_payoffs_vec)
+            value_of_perfect_information <- best_decision_payoff - prior_value_best_payoff
+            best_prior_decision <- decision_ordering[which.max(combined_prior_payoffs_vec)]
+
+            # Store the various output values from the calculations - regression test showed it's fine
+            decision_summary_in_price_scenario[[current_price_key]][[cattle_revenue_key]] <- (
+                best_decision_scenario_count |>
+                    dplyr::group_by(best_decision) |>
+                    dplyr::summarise(
+                        `Prob weighted decision rate` = sum(decision_weight),
+                        `Raw scenario decision rate` = sum(count)
+                    ) |>
+                    dplyr::mutate(
+                        `Carbon price ($ / tonne)` = current_carbon_price,
+                        `Reference cattle revenue` = revenue_option,
+                        `Break even carbon price on prior` = break_even_carbon_price_in_prior
+                    )
+            )
+
+            best_prior_decision_in_scenario[[current_price_key]][[cattle_revenue_key]] <- best_prior_decision
+            evpi_in_scenario[[current_price_key]][[cattle_revenue_key]] <- value_of_perfect_information
+            best_prior_payoff_in_scenario[[current_price_key]][[cattle_revenue_key]] <- prior_value_best_payoff
+        }
+    }
 
 
-# Gross way to do this, should have just changed it earlier
-combined_cases_scenario_evaluation_prettier <- combined_cases_scenario_evaluation |>
-  dplyr::mutate(
-    `Sampling Scenario` =
-      str_replace(`Sampling Scenario`, "Value of ", "")
-  ) |>
-  dplyr::mutate(
-    `Sampling Scenario` =
-      str_replace(`Sampling Scenario`, " sample information", "")
-  ) |>
-  dplyr::filter(!(`Sampling Scenario` %in% voi_cases_to_exclude))
-
-value_per_year_expression <- expression(paste("Value of information ($ yr"^-1, ")"))
-
-value_of_information_plot_from_results <- combined_cases_scenario_evaluation_prettier |>
-  ggplot2::ggplot(ggplot2::aes(
-    x = `Carbon price ($ / tonne)`,
-    y = `Financial Value ($)`,
-    color = `Sampling Scenario`
-  )) +
-  ggplot2::geom_point(size = 2.4) +
-  labs(x = carbon_price_expression, y = value_per_year_expression, colour = "Scenario") +
-  ggplot2::geom_line(lwd = 1.1) +
-  cowplot::theme_cowplot() +
-  ggplot2::scale_x_continuous(
-    breaks = scales::pretty_breaks(n = 7),
-    labels = scales::dollar_format()
-  ) +
-  ggplot2::scale_y_continuous(
-    breaks = scales::pretty_breaks(n = 7),
-    labels = scales::dollar_format()
-  ) +
-  viridis::scale_color_viridis(discrete = TRUE)
+    # Go into the samples then to work out sample information
 
 
-value_of_information_scenario_path <- file.path(figures_dir, "output_voi_evaluation.png")
-ggsave(value_of_information_scenario_path, value_of_information_plot_from_results)
+    # Actual outcome determines payoff not sample estimate -> cast dimension to actual and then replicate across all sample values
+    # loop for one specific value
+    scenario_key_graphs <- list()
+    scenario_key_data <- list()
 
-long_form_voi_data_path <- file.path(synthesised_data_dir, "voi_long_form.xlsx")
-combined_cases_scenario_evaluation_prettier |>
-  writexl::write_xlsx(long_form_voi_data_path)
+    for (scenario_id in (seq(sampling_scenario_order))) {
+      scenario_name_key <- sampling_scenario_order[scenario_id]
 
-# Now think about how to do a good comparison at different cattle revenues
-# Weighted % of time carbon use is better than cattle
+      cur_tidal_measurement_bias <- scenario_tidal_measurement_bias[scenario_id]
+      cur_tidal_measurement_uncertainty <- scenario_tidal_measurement_uncertainty[scenario_id]
+      cur_inundation_bias <- scenario_inundation_bias[scenario_id]
+      cur_inundation_uncertainty <- scenario_inundation_uncertainty[scenario_id]
 
-# Increasing utility of sample information?
+      # Get the two condition sample matrices
+      sample_tidal_beliefs_given_tidal_actual <- sapply(
+        tidal_range_hypotheses,
+        function(x) {
+          calc_tidal_range_belief(
+            x + cur_tidal_measurement_bias,
+            cur_tidal_measurement_uncertainty
+          )
+        }
+      )
+
+      sample_inundation_beliefs_given_inundation_actual <- sapply(
+        inundation_value_sequence,
+        function(x) {
+          calc_inundation_range_belief(
+            x + cur_inundation_bias,
+            cur_inundation_uncertainty
+          )
+        }
+      )
+
+      # Plot both as heat maps
+      tidal_range_sample_heatmap <- joint_straight_to_heatmap(
+        sample_tidal_beliefs_given_tidal_actual,
+        tidal_range_hypotheses,
+        tidal_range_hypotheses,
+        "Sampled tidal range (m)",
+        "Actual tidal range (m)"
+      ) +
+        geom_abline(intercept = 0, slope = 1, colour = "red")
+
+      inundation_sample_heatmap <- joint_straight_to_heatmap(
+        sample_inundation_beliefs_given_inundation_actual,
+        inundation_value_sequence,
+        inundation_value_sequence,
+        "Sampled inundation (hectares)",
+        "Actual inundation (hectares)"
+      ) +
+        geom_abline(intercept = 0, slope = 1, colour = "red")
+
+      sample_distributions_of_outcomes <- plot_grid(tidal_range_sample_heatmap, inundation_sample_heatmap,
+        labels = c(
+          "A) Sample distribution given actual tidal range",
+          "B) Sample distribution of inundation given actual inundation"
+        )
+      )
+
+      scenario_joint_heatmap_path <- file.path(
+          figures_dir,
+          paste(scenario_name_key, "conditional_sample_distribution.png", sep = "_"))
+      save_plot(scenario_joint_heatmap_path, sample_distributions_of_outcomes)
+
+
+      # Now expand out every inundation, tidal range pair and then our belief from that join distribution
+      # 83 121  83 121 - swapping over to array logic
+      # Build the sample distribution join
+      inundation_belief_reshape <- sample_inundation_beliefs_given_inundation_actual |>
+        array(dim = full_indundation_array_dim)
+
+      tidal_range_belief_reshape <- sample_tidal_beliefs_given_tidal_actual |>
+        array(dim = full_tidal_range_array_dim)
+
+      # Dependent on assumption from the prior belief
+      full_conditioned_sample_distribution <- (
+          inundation_belief_reshape[,
+                                    one_array(n_tidal_range_opt),
+                                    ,
+                                    one_array(n_tidal_range_opt)] *
+
+          tidal_range_belief_reshape[one_array(n_inundation_opt),
+                                     ,
+                                     one_array(n_inundation_opt),
+                                     ])
+
+      # Should all be ones for this test
+      # conditional_sample_distribution_test <- full_conditioned_sample_distribution |> apply(MARGIN=c(3, 4), sum)
+      # all.equal(conditional_sample_distribution_test, array(1, dim=c(n_inundation_opt, n_tidal_range_opt)))
+      full_joint_sample_actual_distribution <- (full_conditioned_sample_distribution *
+                                                    array(prior_joint_distribution, dim = actual_dist_array_dim)[
+                                                        one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ])
+
+      # Recover the prior distribution joint values - should pass
+      # all.equal(prior_joint_distribution, apply(full_joint_sample_actual_distribution, MARGIN=c(3, 4), sum))
+
+      # Recover's actual joint
+
+      # Work out the chance of seeing some sample result for inundation and tidal range
+      joint_sample_distribution_array <- full_joint_sample_actual_distribution |>
+        apply_and_retain_sample_dims(sum) |>
+        array(dim = sample_dist_array_dim)
+
+      implied_sample_tidal_range_prob <- joint_sample_distribution_array |> apply(MARGIN = c(2), FUN = sum)
+      implied_inundation_tidal_range_prob <- joint_sample_distribution_array |> apply(MARGIN = c(1), FUN = sum)
+
+      sample_conditional_contrast <- joint_sample_distribution_array[, , 1, 1] /
+        array(implied_sample_tidal_range_prob, dim = tidal_range_actual_array_dim)[one_array(n_inundation_opt), ]
+
+      # Some nice sample distribution plots
+      expected_sample_results_joint_heatmap <- joint_straight_to_heatmap(
+        joint_sample_distribution_array[, , 1, 1],
+        inundation_value_sequence,
+        tidal_range_hypotheses,
+        "Sampled inundation (hectares)",
+        "Sampled Tidal Height"
+      )
+
+      expected_cond_sample_results_joint_heatmap <- joint_straight_to_heatmap(
+        sample_conditional_contrast,
+        inundation_value_sequence,
+        tidal_range_hypotheses,
+        "Sampled inundation (hectares)",
+        "Sampled Tidal Height"
+      )
+
+
+      inundation_estimate_plot <- simple_belief_df(
+        joint_sample_distribution_array |> apply(MARGIN = c(1), FUN = sum),
+        inundation_value_sequence
+      ) |>
+        dplyr::rename("Estimated inundated land (Hectares)" = "target_value") |>
+        simple_univariate_belief_bar("Estimated inundated land (Hectares)", "belief")
+
+      tidal_range_estimate_plot <- simple_belief_df(
+        joint_sample_distribution_array |> apply(MARGIN = c(2), FUN = sum),
+        tidal_range_hypotheses
+      ) |>
+        dplyr::rename("Estimated tidal range (m)" = "target_value") |>
+        simple_univariate_belief_bar("Estimated tidal range (m)", "belief")
+
+      sample_distributions_of_outcomes <- cowplot::plot_grid(tidal_range_sample_heatmap, inundation_sample_heatmap,
+        tidal_range_estimate_plot, inundation_estimate_plot,
+        expected_sample_results_joint_heatmap,
+        expected_cond_sample_results_joint_heatmap,
+        labels = c(
+          "A) Tidal: Sample given actual",
+          "B) Inundation: Sample given actual",
+          "C) Tidal: sample dist",
+          "D) Inundation: Sample dist",
+          "E) Tidal+Inundation: Joint sample dist",
+          "F) Indundation+Tidal: Sample given sample"
+        ),
+        ncol = 2,
+        label_size = 16,
+        label_y = 1.02,
+        label_x = -0.1,
+        hjust = -0.5
+      )
+
+      implied_joint_sample_distribution_path <- file.path(
+          figures_dir,
+          paste(scenario_name_key, "sample_distribution_summary.png", sep = "_")
+          )
+
+      save_plot(
+          implied_joint_sample_distribution_path,
+          sample_distributions_of_outcomes,
+          base_height = 9, base_width = 12
+      )
+
+      # Combined prior sample
+      posterior_probability_distribution <- replace_matrix_nans(
+          full_joint_sample_actual_distribution /
+              joint_sample_distribution_array[, , one_array(n_inundation_opt), one_array(n_tidal_range_opt)])
+
+      # Check all conditional distributions sum to 1
+      # all.equal(posterior_probability_distribution |> apply(MARGIN=c(1, 2), FUN=sum), array(1, dim=c(n_inundation_opt, n_tidal_range_opt)))
+
+      # For every theoretical ACCU price and cattle revenue price, calculate utility, EVPI, and EVSI
+
+      # Reshape sample joint distribution
+      reshaped_joint_sample_distribution <- array(joint_sample_distribution_array, dim = sample_dist_array_dim)
+      complete_full_reshaped_joint_sample_dist_array <- reshaped_joint_sample_distribution[, , one_array(n_inundation_opt), one_array(n_tidal_range_opt)]
+
+      # Use the calculated distributions to now do all of the value of information estimates
+      scenario_key_metrics <- list()
+
+      flog.info(glue::glue("Starting calculations for against all payoff options"))
+      for (current_carbon_price in accu_price_sequence_with_latest) {
+        flog.info(glue::glue("Starting calculations for ${current_price_key}ACCU"))
+        # Key for storing results
+        current_price_key <- paste(current_carbon_price)
+
+        # Expand out the carbon revenue to match the sample scenario shape
+        carbon_payoff_sample_scenarios <- carbon_scenario_revenue_sample_dist[[current_price_key]]
+
+        # Add the next layer of access to my lists
+        scenario_key_metrics[[current_price_key]] <- list()
+        for (cattle_revenue_per_hectare in cattle_revenue_per_hectare_options) {
+          # Key for storing results
+          cattle_revenue_key <- paste(cattle_revenue_per_hectare)
+
+          # Pull out the pre-calculated cattle scenario data
+          expected_cattle_payoff_in_every_sample_scenario <- cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_payoff"]]
+
+          # best prior decision payoff
+          best_prior_decision_payoff <- best_prior_payoff_in_scenario[[current_price_key]][[cattle_revenue_key]]
+
+          # Do value of sample information calculations
+          # For each sample scenario, best decision after calculations
+          carbon_sample_scenario_expected_payoff <- (
+              (carbon_payoff_sample_scenarios * posterior_probability_distribution) |>
+                  apply(c(1, 2), sum)
+              )
+          cattle_sample_scenario_expected_payoff <- (
+              (expected_cattle_payoff_in_every_sample_scenario * posterior_probability_distribution) |>
+                  apply(c(1, 2), sum))
+
+          sample_overall_payoff_across_multiple_samples <- (
+              (pmax(carbon_sample_scenario_expected_payoff, cattle_sample_scenario_expected_payoff) *
+                   joint_sample_distribution_array[, , 1, 1]) |>
+                  sum())
+
+          expected_value_of_sample_information <- sample_overall_payoff_across_multiple_samples - best_prior_decision_payoff
+
+          # Store the final values of the calculations
+          key_voi_metrics_for_scenario <- tibble(
+            `Cattle revenue ($ / He / yr)` = cattle_revenue_per_hectare,
+            `Carbon price ($ / tonne)` = current_carbon_price,
+            `Best Prior decision landuse` = best_prior_decision_in_scenario[[current_price_key]][[cattle_revenue_key]],
+            `Expected annualised payoff on prior decision` = best_prior_decision_payoff,
+            `Value of perfect information` = evpi_in_scenario[[current_price_key]][[cattle_revenue_key]],
+            `Value of sample information` = expected_value_of_sample_information,
+            `Sampling Scenario` = scenario_name_key
+          )
+
+    #       scenario_key_metrics_cached used to key  a value for a pre-post check
+          scenario_key_metrics[[current_price_key]][[cattle_revenue_key]] <- (
+            key_voi_metrics_for_scenario
+          )
+        }
+      }
+
+      # Combine some results for each pricing scenario now
+      combined_scenario_results <- scenario_key_metrics |>
+        lapply(dplyr::bind_rows) |>
+        dplyr::bind_rows()
+
+      # Visualise the combined results
+      colour_scale_limits_viridis_c <- tidal_range_carbon_price_scenarios$`Annualised Site revenue` |>
+        min_max_vec()
+
+      value_of_information_scale_bounds <- c(combined_scenario_results$`Value of perfect information`, combined_scenario_results$`Value of sample information`, 0) |>
+        min_max_vec()
+
+      long_form_value_of_information <- combined_scenario_results |>
+        dplyr::select(
+          `Carbon price ($ / tonne)`,
+          `Value of perfect information`,
+          `Value of sample information`
+        ) |>
+        pivot_longer(-`Carbon price ($ / tonne)`, names_to = "Measure", values_to = "Value")
+
+      voi_heatmap <- long_form_value_of_information |>
+        ggplot2::ggplot(aes(x = `Carbon price ($ / tonne)`, y = Measure, fill = Value)) +
+          ggplot2::geom_tile(colour = "Black") +
+          ggplot2::theme_cowplot() +
+          ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(n = 7), labels = scales::number_format()) +
+          ggplot2::scale_fill_viridis_c()
+
+      scenario_voi_heatmap_path <- file.path(figures_dir, paste(scenario_name_key, "heatmap_of_voi_values.png", sep = "_"))
+      ggplot2::ggsave(scenario_voi_heatmap_path, voi_heatmap)
+
+      combined_scenario_results_output_path <- file.path(
+          synthesised_data_dir,
+          paste(scenario_name_key, "event_scenarios_first_case.xlsx", sep = "_"))
+
+      writexl::write_xlsx(
+        combined_scenario_results,
+        combined_scenario_results_output_path
+      )
+
+      # Share out the results
+      scenario_key_data[[scenario_name_key]] <- combined_scenario_results
+      scenario_key_graphs[[scenario_name_key]] <- voi_heatmap
+    }
+
+    # Combine and plot full scenario shared results
+    # Payoff in and certainty of decision in every scenario
+    # "Middle complexity" -> "Moderate complexity"
+    full_scenario_voi_data <- scenario_key_data |>
+      bind_rows()
+
+    full_scenario_voi_data |>
+      writexl::write_xlsx(
+          complete_scenario_data_path
+      )
+
+    } else {
+    full_scenario_voi_data <- readxl::read_excel(
+        complete_scenario_data_path
+    )
+}
+
+if (redo_voi_outcome_plots){
+    #
+    perfect_information_long_form <- full_scenario_voi_data |>
+        dplyr::filter(`Cattle revenue ($ / He / yr)` == cattle_revenue_per_hectare_per_year) |>
+        dplyr::select(
+            `Carbon price ($ / tonne)`,
+            `Value of perfect information`
+        ) |>
+        tidyr::pivot_longer(`Value of perfect information`, names_to = "Sampling Scenario", values_to = "Financial Value ($)")
+
+    sample_scenario_long_form <- full_scenario_voi_data |>
+        dplyr::filter(`Cattle revenue ($ / He / yr)` == cattle_revenue_per_hectare_per_year) |>
+        dplyr::select(
+            `Carbon price ($ / tonne)`,
+            `Value of sample information`,
+            `Sampling Scenario`
+        ) |>
+        dplyr::mutate(`Sampling Scenario` = paste("Value of ", `Sampling Scenario`, " sample information", sep = "")) |>
+        dplyr::rename("Financial Value ($)" = "Value of sample information")
+
+
+    voi_cases_to_exclude <- c("high tidal uncertainty, confident inundation", "low tidal uncertainty, uncertain inundation")
+
+    combined_cases_scenario_evaluation <- dplyr::bind_rows(
+        sample_scenario_long_form,
+        perfect_information_long_form
+    ) |>
+        dplyr::mutate(`Measure type` = case_when(str_detect(`Sampling Scenario`, "sample") ~ "Sample", TRUE ~ "Perfect"))
+
+
+    # Gross way to do this, should have just changed it earlier
+    combined_cases_scenario_evaluation_prettier <- combined_cases_scenario_evaluation |>
+        dplyr::mutate(
+            `Sampling Scenario` =
+                str_replace(`Sampling Scenario`, "Value of ", "")
+        ) |>
+        dplyr::mutate(
+            `Sampling Scenario` =
+                str_replace(`Sampling Scenario`, " sample information", "")
+        ) |>
+        dplyr::filter(!(`Sampling Scenario` %in% voi_cases_to_exclude))
+
+    value_per_year_expression <- expression(paste("Value of information ($ yr"^-1, ")"))
+
+    value_of_information_plot_from_results <- combined_cases_scenario_evaluation_prettier |>
+        ggplot2::ggplot(ggplot2::aes(
+            x = `Carbon price ($ / tonne)`,
+            y = `Financial Value ($)`,
+            color = `Sampling Scenario`
+        )) +
+        ggplot2::geom_point(size = 2.4) +
+        labs(x = carbon_price_expression, y = value_per_year_expression, colour = "Scenario") +
+        ggplot2::geom_line(lwd = 1.1) +
+        cowplot::theme_cowplot() +
+        ggplot2::scale_x_continuous(
+            breaks = scales::pretty_breaks(n = 7),
+            labels = scales::dollar_format()
+        ) +
+        ggplot2::scale_y_continuous(
+            breaks = scales::pretty_breaks(n = 7),
+            labels = scales::dollar_format()
+        ) +
+        viridis::scale_color_viridis(discrete = TRUE)
+
+
+    value_of_information_scenario_path <- file.path(figures_dir, "output_voi_evaluation.png")
+    ggsave(value_of_information_scenario_path, value_of_information_plot_from_results)
+
+    long_form_voi_data_path <- file.path(synthesised_data_dir, "voi_long_form.xlsx")
+    combined_cases_scenario_evaluation_prettier |>
+        writexl::write_xlsx(long_form_voi_data_path)
+
+    # Now think about how to do a good comparison at different cattle revenues
+    # Weighted % of time carbon use is better than cattle
+    combined_decision_rate_values <- decision_summary_in_price_scenario |>
+        lapply(dplyr::bind_rows) |>
+        dplyr::bind_rows()
+
+    targeted_decision_for_plot <- "Use for carbon sequestration"
+
+    preferred_carbon_decision_rates <- combined_decision_rate_values |>
+        dplyr::filter(best_decision == targeted_decision_for_plot,
+                      `Carbon price ($ / tonne)` != latest_real_carbon_price_estimate) |>
+        build_underlying_heatmap(
+            "Carbon price ($ / tonne)",
+            "Reference cattle revenue",
+            "Prob weighted decision rate"
+        ) +
+        ggplot2::labs(
+            y = "Cattle Revenue Per Hectare Per Year",
+            fill = "% of prior scenarios where carbon is better"
+        ) +
+        scale_fill_viridis_c(labels = scales::percent_format(),
+                             breaks = scales::pretty_breaks(n = 5))
+
+    preferred_carbon_rates_path <- file.path(figures_dir, 'rate_of_carbon_as_preferred_decision.png')
+    ggplot2::ggsave(preferred_carbon_rates_path, preferred_carbon_decision_rates)
+
+    # Increasing utility of sample information?
+    full_scenario_voi_data_with_relative <- full_scenario_voi_data  |>
+        dplyr::mutate(
+            `Relative value of sample info to prior` = (`Value of sample information` /
+                                                            `Expected annualised payoff on prior decision`))
+
+    sample_information_value_under_many_scenarios <- full_scenario_voi_data_with_relative |>
+        dplyr::filter(`Carbon price ($ / tonne)` != latest_real_carbon_price_estimate)|>
+        build_underlying_heatmap(
+            "Carbon price ($ / tonne)",
+            "Cattle revenue ($ / He / yr)",
+            "Value of sample information"
+        ) +
+        ggplot2::labs(
+            y = "Cattle Revenue Per Hectare Per Year",
+            fill = "Expected Value of Sample Information ($ / yr)"
+        ) +
+        scale_fill_viridis_c(labels = scales::dollar_format(),
+                             breaks = scales::pretty_breaks(n = 5)) +
+        facet_wrap(~`Sampling Scenario`)
+
+    sample_info_value_path <- file.path(figures_dir, 'sample_information_against_cattle_and_carbon.png')
+    ggplot2::ggsave(sample_info_value_path, sample_information_value_under_many_scenarios)
+
+
+    sample_information_value_under_many_scenarios <- full_scenario_voi_data_with_relative |>
+        dplyr::filter(`Carbon price ($ / tonne)` != latest_real_carbon_price_estimate) |>
+        build_underlying_heatmap(
+            "Carbon price ($ / tonne)",
+            "Cattle revenue ($ / He / yr)",
+            "Relative value of sample info to prior"
+        ) +
+        ggplot2::labs(
+            y = "Cattle Revenue Per Hectare Per Year",
+            fill = "relative % size of prior payoff and value of sample information"
+        ) +
+        scale_fill_viridis_c(labels = scales::percent_format(),
+                             breaks = scales::pretty_breaks(n = 5)) +
+        facet_wrap(~`Sampling Scenario`)
+
+    relative_sample_info_path <- file.path(figures_dir, 'relative_sample_information_against_cattle_and_carbon.png')
+    ggplot2::ggsave(relative_sample_info_path, sample_information_value_under_many_scenarios)
+
+}
+

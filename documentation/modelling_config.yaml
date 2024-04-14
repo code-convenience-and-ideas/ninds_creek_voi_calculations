@@ -1,25 +1,25 @@
-analysis_variable_arguments:  # Ideas is to collate and use variable here to allow verbose description
+analysis_variable_arguments: !argument_list # Ideas is to collate and use variable here to allow verbose description
   - onsite_tidal_range: !analysis_argument
-      name:
+      name: 'Tidal range onsite'
       description:
       value: 1.9
   - mean_actual_tidal_height: !analysis_argument
-      name:
+      name: 'Mean tidal height onsite'
       description:
       value: 0.76
   - reference_cattle_revenue: !analysis_argument
-      name:
+      name: 'Baseline cattle revenue'
       description:
       value: 976.8
   - n_cattle_revenue_options: !analysis_argument
-      name:
+      name: 'Number of cattle revenue options'
       description:
       value: 10
   - accu_price_max_considered: !analysis_argument
-      name:
+      name: 'Maximum carbon price considered'
       description:
       value: 150
   - accu_price_step_size: !analysis_argument
-      name:
+      name: 'Steps between considered carbon prices'
       description:
       value: 5
