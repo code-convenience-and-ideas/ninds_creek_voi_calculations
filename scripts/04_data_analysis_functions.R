@@ -66,20 +66,20 @@ raster_and_shape_plot <- function(rasterlayer_data, sf_boundary_data){
     # Made some tweaks per: https://tmieno2.github.io/R-as-GIS-for-Economists/geom-raster.html
     raster_under_shape_boundaries <- sf_boundary_data |>
         ggplot2::ggplot() +
-        geom_raster(ggplot2::aes(x = x, y = y, fill = layer),
+        ggplot2::geom_raster(ggplot2::aes(x = x, y = y, fill = layer),
                     data = raster_image_df) +
-        geom_sf(aes(geometry = geometry),
+        ggplot2::geom_sf(ggplot2::aes(geometry = geometry),
                 colour = 'black',
                 alpha = 0, lwd = 1.0) +
         # Wanting a colourblind friendly scale
-        scale_fill_viridis_c() +
+        ggplot2::scale_fill_viridis_c() +
         # x,y lat-longs don't mean much to a viewer
-        theme_void() +
-        theme(
+        ggplot2::theme_void() +
+        ggplot2::theme(
             legend.position = "bottom"
         ) +
         # Small image so equi-spaced lat-long shouldn't be too bad
-        coord_sf(crs = boundary_data_crf)
+        ggplot2::coord_sf(crs = boundary_data_crf)
 
     return(raster_under_shape_boundaries)
 }
@@ -356,8 +356,10 @@ extract_all_results_details <- function(worksheet, n_ceas) {
 #' cea_input_data <- extract_cea_input_data(CEA_Input_Data, 3)
 #'
 extract_cea_input_data <- function(worksheet, n_ceas) {
+  number_of_cea_entry_cols <- 11
+
   # Extract CEA input data from worksheet
-  extract_data_frame_values(worksheet, cea_parameter_starting_cell, 11, n_ceas)
+  extract_data_frame_values(worksheet, cea_parameter_starting_cell, number_of_cea_entry_cols, n_ceas)
 }
 
 

@@ -44,6 +44,7 @@ tidal_range_hypotheses <- seq(
 tidal_range_hypotheses_bounds <- c(0, maximum_tidal_height_allowed + step_size_in_tidal_height / 2)
 
 total_site_area <- area_shape_files$Hectares |> sum()
+total_site_area_rounded_up_to <- ceiling(total_site_area / 10) * 10
 
 inundation_range_of_values <- c(0, total_site_area)
 inundation_step_size <- 1
@@ -75,95 +76,107 @@ accu_considered_matrix_prices <- seq(
 ##################################################################################################
 # Use the DEM model relief and shapefiles for a prior belief of inundation for each tidal height #
 ##################################################################################################
-# Plot an overlaid raster + shapefile plot of the site for my reference
-site_elevation_plot_with_boundaries <- raster_and_shape_plot(raster_image, area_shape_files) +
-    labs(fill = "Elevation compared to sea level (m)",
-         title = "Site elevation with area boundaries overlaid")
 
-elevation_image_path <- file.path(figures_dir, 'site_elevatio_with_cea_boundaries.png')
-ggplot2::ggsave(elevation_image_path, site_elevation_plot_with_boundaries)
+# Set up paths for output items in this analysis reused elsewhere
+raster_tibble_storage_path <- file.path(processeddata_dir, 'rasters_in_tibble.rds')
 
-# # Create a plot of the setup using tmap
-# tm_shape(area_shape_files) +
-#   tm_polygons(
-#     "Hectares", pallete="Blues"
-#   )
+if (stage_to_start_from <= analysis_stages_vectors[1]) {
+    # Plot an overlaid raster + shapefile plot of the site for my reference
+    site_elevation_plot_with_boundaries <- raster_and_shape_plot(raster_image, area_shape_files) +
+        labs(fill = "Elevation compared to sea level (m)",
+             title = "Site elevation with area boundaries overlaid")
 
-# Alignment of both files is good
-raster_values_in_shape_files <- raster::extract(
-  raster_image,
-  sf::as_Spatial((sf::st_zm(sf::st_geometry(area_shape_files))))
-)
+    elevation_image_path <- file.path(figures_dir, 'site_elevatio_with_cea_boundaries.png')
+    ggplot2::ggsave(elevation_image_path, site_elevation_plot_with_boundaries)
 
-names(raster_values_in_shape_files) <- clean_cea_names(area_shape_files$name_based_on_file)
+    # Alignment of both files is good
+    raster_values_in_shape_files <- raster::extract(
+        raster_image,
+        sf::as_Spatial((sf::st_zm(sf::st_geometry(area_shape_files))))
+    )
 
-# Prepare CEA constants
-cea_average_mahd_vector <- unlist(raster_values_in_shape_files |> map(function(x) mean(x, na.rm = T)))
+    names(raster_values_in_shape_files) <- clean_cea_names(area_shape_files$name_based_on_file)
 
-# Calculate inundated land in hectares and average hieght
-fraction_not_flooded_in_scenario <- pairwise_map_unpack(
-  raster_values_in_shape_files,
-  tidal_range_hypotheses,
-  fraction_over_cutoff
-) |>
-  dplyr::rename("Tidal Height" = "Numeric values")
+    # Prepare CEA constants
+    cea_average_mahd_vector <- unlist(raster_values_in_shape_files |> map(function(x) mean(x, na.rm = T)))
 
-average_flooded_land_height <- pairwise_map_unpack(
-  raster_values_in_shape_files,
-  tidal_range_hypotheses,
-  height_for_flooded_land
-) |>
-  dplyr::rename("Tidal Height" = "Numeric values")
+    # Calculate inundated land in hectares and average height
+    inundated_land_rename_vector <- c("Tidal Height" = "Numeric values")
 
-# Put rasters into a tibble
-# Extract the area within each region
-cea_land_area_hectares_in_shapefile <- area_shape_files |>
-  sf::st_drop_geometry() |>
-  dplyr::select(name_based_on_file, Hectares) |>
-  dplyr::mutate(name_based_on_file = clean_cea_names(name_based_on_file)) |>
-  dplyr::rename("cea_names" = "name_based_on_file") |>
-  dplyr::mutate(meanAHD = cea_average_mahd_vector)
+    fraction_not_flooded_in_scenario <- pairwise_map_unpack(
+        raster_values_in_shape_files,
+        tidal_range_hypotheses,
+        fraction_over_cutoff
+    ) |>
+        dplyr::rename(!!!inundated_land_rename_vector)
 
-raster_tibble <- establish_cea_raster_data_tibble(
-  raster_values_in_shape_files,
-  cea_land_area_hectares_in_shapefile
-)
+    average_flooded_land_height <- pairwise_map_unpack(
+        raster_values_in_shape_files,
+        tidal_range_hypotheses,
+        height_for_flooded_land
+    ) |>
+        dplyr::rename(!!!inundated_land_rename_vector)
 
-# Calculations with areas
-flooded_region_coverage <- pairwise_map_measure_to_longform(
-  fraction_not_flooded_in_scenario, "Fraction of area not flooded"
-) |>
-  dplyr::left_join(pairwise_map_measure_to_longform(
-    average_flooded_land_height, "Average flooded land height (mAHD)"
-  )) |>
-  dplyr::left_join(cea_land_area_hectares_in_shapefile) |>
-  dplyr::mutate(
-    `Hectares flooded` = Hectares * (1 - `Fraction of area not flooded`)
-  )
+    # Put rasters into a tibble
+    # Extract the area within each region
+    area_key_name_vars <- c("name_based_on_file", "Hectares")
 
-# Individual CEA flooding fraction across tidal height
-cea_flooding_at_heights <- typical_pointed_ggplot_line_plot(
-  flooded_region_coverage,
-  "Tidal Height",
-  "Fraction of area not flooded",
-  "cea_names"
-) +
-  ggplot2::labs(x = "mAHD for max tidal height")
+    cea_land_area_hectares_in_shapefile <- area_shape_files |>
+        sf::st_drop_geometry() |>
+        dplyr::select(dplyr::all_of(area_key_name_vars)) |>
+        dplyr::mutate(name_based_on_file = clean_cea_names(name_based_on_file)) |>
+        dplyr::rename("cea_names" = "name_based_on_file") |>
+        dplyr::mutate(meanAHD = cea_average_mahd_vector)
 
-ggplot2::ggsave(file.path(figures_dir, "flooded_land_scenarios.png"),
-  cea_flooding_at_heights,
-  width = 8
-)
+    raster_tibble <- establish_cea_raster_data_tibble(
+        raster_values_in_shape_files,
+        cea_land_area_hectares_in_shapefile
+    )
+
+    # Save the raster tibble out to disk
+    saveRDS(raster_tibble, raster_tibble_storage_path)
+
+
+    # Calculations within areas
+    flooded_region_coverage <- pairwise_map_measure_to_longform(
+        fraction_not_flooded_in_scenario, "Fraction of area not flooded"
+    ) |>
+        dplyr::left_join(pairwise_map_measure_to_longform(
+            average_flooded_land_height, "Average flooded land height (mAHD)"
+        )) |>
+        dplyr::left_join(cea_land_area_hectares_in_shapefile) |>
+        dplyr::mutate(
+            `Hectares flooded` = Hectares * (1 - `Fraction of area not flooded`)
+        )
+
+    # Individual CEA flooding fraction across tidal height
+    cea_flooding_at_heights <- typical_pointed_ggplot_line_plot(
+        flooded_region_coverage,
+        "Tidal Height",
+        "Fraction of area not flooded",
+        "cea_names"
+    ) +
+        ggplot2::labs(x = "mAHD for max tidal height",
+                      colour = 'CEA Names') +
+        scale_color_viridis_d()
+
+    flooding_land_scenario_path <- file.path(figures_dir, "flooded_land_scenarios.png")
+    ggplot2::ggsave(
+        flooding_land_scenario_path,
+        cea_flooding_at_heights,
+        width = 8
+    )
+} else {
+    # Read the tbble df saved to disk
+    raster_tibble <- readRDS(raster_tibble_storage_path)
+}
+
 #######################################################################################################
 # Use the raster to establish potential grazing land values
 #######################################################################################################
 full_site_area_mentioned_in_paper <- 86.8
 
 current_grazing_land_ceas <- c("CEA 3", "CEA 4", "CEA 5", "CEA 6")
-total_site_area <- raster_tibble |>
-  raster_tibble_area_summary()
-
-total_site_area_rounded_up_to <- ceiling(total_site_area / 10) * 10
 
 grazing_site_rea <- raster_tibble |>
   dplyr::filter(cea_names %in% current_grazing_land_ceas) |>
@@ -176,46 +189,95 @@ grazing_land_scenario_name <- c(
   "Current (56 ha)"
 )
 
-grazing_land_reduced_selection <- tibble::tibble(
-  grazing_land_available = grazing_land_scenario_val,
-  `Scenario for hectares of usable land` = grazing_land_scenario_name
-) |>
-  dplyr::mutate(fraction_of_land_for_grazing = grazing_land_available / total_site_area) |>
-  tidyr::crossing(`Reference grazing revenue per hectare per year` = cattle_revenue_per_hectare_options) |>
-  dplyr::mutate(`Annualised Site revenue` = fraction_of_land_for_grazing * `Reference grazing revenue per hectare per year`) |>
-  dplyr::mutate(`Tidal range (m)` = 3) # Added as constant for aligned axis in a graph
+# Setup up paths in advance
+reduced_land_section_path <- file.path(processeddata_dir, 'reducing_grazing_land_section.parquet')
+enumerated_grazing_land_path <- file.path(processeddata_dir, 'reducing_frazing_land_section.parquet')
 
-# Enumerate possibilities of grazing land use against
-grazing_land_full_pairings <- tibble::tibble(
-  `Productive grazing land (ha)` = seq(0, total_site_area_rounded_up_to, 0.01)
-) |>
-  tidyr::crossing(`Reference grazing revenue per hectare per year` = cattle_revenue_per_hectare_options) |>
-  dplyr::mutate(`Fraction of site for grazing` = `Productive grazing land (ha)` / total_site_area) |>
-  dplyr::mutate(`Annualised Site revenue ($ / ha / yr)` = `Fraction of site for grazing` * `Reference grazing revenue per hectare per year`) |>
-  dplyr::mutate(`Tidal range (m)` = 3) # Added as constant for aligned axis in a graph
+if (stage_to_start_from <= analysis_stages_vectors[1]) {
+
+    # Build a simple reduced section for plotting against some carbon scenarios
+    grazing_land_reduced_selection <- tibble::tibble(
+        grazing_land_available = grazing_land_scenario_val,
+        `Scenario for hectares of usable land` = grazing_land_scenario_name
+    ) |>
+        dplyr::mutate(fraction_of_land_for_grazing = grazing_land_available / total_site_area) |>
+        tidyr::crossing(`Reference grazing revenue per hectare per year` = cattle_revenue_per_hectare_options) |>
+        dplyr::mutate(`Annualised Site revenue` = fraction_of_land_for_grazing * `Reference grazing revenue per hectare per year`) |>
+        dplyr::mutate(`Tidal range (m)` = 3) # Added as constant for aligned axis in a graph
+
+    arrow::write_parquet(grazing_land_reduced_selection, reduced_land_section_path)
+
+    # Enumerate a lot of possibility for a simple smooth plot + some contour building
+    # Enumerate possibilities of grazing land use against
+    grazing_land_full_pairings <- tibble::tibble(
+        `Productive grazing land (ha)` = seq(0, total_site_area_rounded_up_to, 0.01)
+    ) |>
+        tidyr::crossing(`Reference grazing revenue per hectare per year` = cattle_revenue_per_hectare_options) |>
+        dplyr::mutate(`Fraction of site for grazing` = `Productive grazing land (ha)` / total_site_area) |>
+        dplyr::mutate(`Annualised Site revenue ($ / ha / yr)` = `Fraction of site for grazing` * `Reference grazing revenue per hectare per year`) |>
+        dplyr::mutate(`Tidal range (m)` = 3) # Added as constant for aligned axis in a graph
+
+    arrow::write_parquet(grazing_land_full_pairings, enumerated_grazing_land_path)
+} else {
+    grazing_land_reduced_selection <- arrow::read_parquet(reduced_land_section_path)
+    grazing_land_full_pairings <- arrow::read_parquet(enumerated_grazing_land_path)
+
+}
 
 ########################################################################################################
 # Run BlueCAM in various prior belief scenarios to estimate carbon abatement for financial calculations
 ########################################################################################################
+# Set the bluecam sheet target and a mapping from BlueCAM climate specification and BlueCam excel sheet
+target_blue_cam_sheet <- "Tropical Monsoon"
+
+bluecam_climate_sheet_to_stpi <- c(
+    "Tropical Monsoon" = "Tropical - monsoon",
+    "Tropical humid" = "Tropical - humid",
+    "Temperate" = "Temperate - with mangroves",
+    "Subtropical" = "Subtropical",
+    "Arid & Semi arid" = "Arid - semi-arid"
+)
+
+stpi_climate <- bluecam_climate_sheet_to_stpi[[target_blue_cam_sheet]]
+
+
 # Read in the description of the tidal areas
 land_use_area_path <- file.path(manualdata_dir, "CEA_LandUseAreas.xlsx")
 land_use_area_data <- readxl::read_excel(land_use_area_path)
 
-# For each flooding scenario, enter the results into BlueCAM, rip out the results and save it
+# Load in the stpi mapping table
+stpi_mapping_table_path <- file.path(manualdata_dir, "BlueCAMModellingDocumentTable2.xlsx")
+stpi_range_cols <- c("STPI range of Carbon Estimation Area (CEA) - lower",
+                     "STPI range of Carbon Estimation Area (CEA) - upper")
+
+stpi_mapping_table_data <- readxl::read_xlsx(stpi_mapping_table_path) |>
+    dplyr::mutate(across(
+        dplyr::all_of(stpi_range_cols),
+        function(x) if_else(abs(x) >= 100, Inf * x, x)
+    ))
+
+relevant_stpi_mapping_table <- stpi_mapping_table_data |>
+    dplyr::filter(Climate == stpi_climate)
+
+
+# For each flooding scenario, we'll enter results into BlueCam and record the values
 # Open Excel Document using excel interface
 blue_cam_model_excel_original_path <- file.path(synthesised_data_dir, "The blue carbon accounting model (BlueCAM).xlsx")
 blue_cam_model_excel_copy_path <- stringr::str_replace(blue_cam_model_excel_original_path, ".xlsx", " - copy.xlsx")
 file.copy(blue_cam_model_excel_original_path, blue_cam_model_excel_copy_path)
-target_blue_cam_sheet <- "Tropical Monsoon"
 
 # Flag if we need to rerun the carbon estimation through bluecam or not
-reestimate_carbon_sequestration <- TRUE
+reestimate_carbon_sequestration <- (stage_to_start_from <= analysis_stages_vectors[2])
 
-# Tutorial examples for interacting with excel client: https://www.r-bloggers.com/2021/07/rdcomclient-read-and-write-excel-and-call-vba-macro-in-r/
-# Set constants used in multiple palces
+# Tutorial examples for interacting with excel client:
+# https://www.r-bloggers.com/2021/07/rdcomclient-read-and-write-excel-and-call-vba-macro-in-r/
+
+# Set constants used in multiple place
 # Differs from permanence period
 permancence_period_years <- 25
 reporting_time_step_years <- 25
+number_of_ceas <- land_use_area_data |> nrow()
+starting_carbon_abatement_carryover <- 0
 
 # Now
 if (reestimate_carbon_sequestration) {
@@ -227,20 +289,55 @@ if (reestimate_carbon_sequestration) {
 
   monsoonEvaluationsWorkSheet <- bluecamworkbook$Worksheets(target_blue_cam_sheet)
 
+  # cea parameter table
   cea_parameter_starting_cell <- c(2, 10) # "J2"
+  number_of_cea_cols <- 11
+  number_of_cea_rows <- number_of_ceas
+
+  # time period parameter table
   time_period_parameter_starting_cell <- c(2, 1) # "A2"
+  number_of_time_rows <- 1
+  number_of_time_cols <- 5
+
+  # fuel use parameter table
   fuel_use_starting_cell <- c(2, 7) # "G2"
+  number_of_fuel_cols <- 2
+  number_of_fuel_rows <- 4
+
+
   carryover_starting_cell <- c(2, 41) # "AO2"
+  number_of_carryover_cols <- 1
+  number_of_carryover_rows <- 1
+
+  # Results output table
   results_starting_cell <- c(2, 43)
 
+
+  # Greenhouse gases table output
   ghgs_results_starting_cell <- c(2, 22)
+
+  # Vegetation table output
   vegetation_results_starting_cell <- c(2, 31)
+
+  # Soil results output
   soil_results_starting_cell <- c(2, 35)
 
-  # Example template dataframes from teh data
-  template_cea_parameters_df <- extract_cea_input_data(monsoonEvaluationsWorkSheet, 9)
-  template_time_period_parameters_df <- extract_data_frame_values(monsoonEvaluationsWorkSheet, time_period_parameter_starting_cell, 5, 1)
-  template_fuel_use_df <- extract_data_frame_values(monsoonEvaluationsWorkSheet, fuel_use_starting_cell, 2, 4)
+  # Example template dataframes from the data
+  template_cea_parameters_df <- extract_cea_input_data(
+      monsoonEvaluationsWorkSheet,
+      number_of_ceas)
+
+  template_time_period_parameters_df <- extract_data_frame_values(
+      monsoonEvaluationsWorkSheet,
+      time_period_parameter_starting_cell,
+      number_of_time_cols,
+      number_of_time_rows)
+
+  template_fuel_use_df <- extract_data_frame_values(
+      monsoonEvaluationsWorkSheet,
+      fuel_use_starting_cell,
+      number_of_fuel_cols,
+      number_of_fuel_rows)
 
   initial_time_period_df <- template_time_period_parameters_df
   initial_time_period_df[[1, 1]] <- date_string_to_excel_number("2021-07-01")
@@ -250,7 +347,9 @@ if (reestimate_carbon_sequestration) {
   initial_time_period_df[[1, 5]] <- 0.1
 
   # Load CEA information from excel sheet
-  starting_cea_data_frame <- convert_manual_cea_data_to_bluecam_format(land_use_area_data, template_cea_parameters_df) |>
+  starting_cea_data_frame <- convert_manual_cea_data_to_bluecam_format(
+      land_use_area_data, template_cea_parameters_df
+      ) |>
     dplyr::mutate(`CEA number` = clean_cea_names(`CEA number`))
 
   # Set up initial worksheet state
@@ -258,63 +357,17 @@ if (reestimate_carbon_sequestration) {
     monsoonEvaluationsWorkSheet,
     initial_time_period_df,
     starting_cea_data_frame,
-    0
+    starting_carbon_abatement_carryover
   )
 
   # Now iterate over tidal heights
-  given_tidal_height <- 0.2
-
-  # MAKE SURE TO INCLUDE SEA LEVEL RISE IN THE CEA LAND INCLUSION CRITERIA
-  # REPORTING PERIOD CONFIRKMED AS 25 YERAS
-  # ALICE TO CHECK THE 0.1STPI seagrass for Monsoon habitat in BLUECAM TABLES
-  # ALICE TO CHECK THE TIDAL REINTRODUCTION FIELD
-  # ALICE WILL DOUBLE CHECK THE VEGETATION AGE FOR THE REPORTING PERIOD
-  # DON'T GET PENALISED FOR NEGATIVE ACCUS at END OF 25 YEAR REPORTING PERIOD
-  # NO INDIVIDUAL CONSIDERATION OF CEAS AND THEIR COMPLETE INCLUSION / EXCLUSION
-  # ALL CEAS ARE CONSIDERED ENTIRELY TOGETHER
-  # DECISION FOR PRICING IS JUST EVERYTHING OR NOTHING
-  # Reporting period confirmed as 2021 - 2046
-  # No project area discount applied
-
-  # EXPECTED FINAL GRAPHIC OF IMPORTANCE
-  # PLOT OF THE EXPECTED VALUE OF SAMPLE INFORMATION FOR EACH METHOD COMPARED TO THE SALE PRICE
-  # OF ALLOCATED ACCUs
-  # Essentially - line plots with a value of sample information for each of the three methods
-  #  Addendum, a line for the value of perfect information?
-
-  # Table detail prior beliefs for each sample information scenario
-
-  # ALICE TO PROVIDE THE VALUE OF USING THE LAND FOR AN AGRICULTURAL USE VERSUS
-  # USE FOR CARBON OFFSET
-
-  # Load in the stpi mapping table
-  stpi_mapping_table_path <- file.path(manualdata_dir, "BlueCAMModellingDocumentTable2.xlsx")
-  stpi_mapping_table_data <- readxl::read_xlsx(stpi_mapping_table_path) |>
-    dplyr::mutate(across(
-      c(
-        `STPI range of Carbon Estimation Area (CEA) - lower`,
-        `STPI range of Carbon Estimation Area (CEA) - upper`
-      ),
-      function(x) if_else(abs(x) >= 100, Inf * x, x)
-    ))
-
-  relevant_stpi_mapping_table <- stpi_mapping_table_data |>
-    dplyr::filter(Climate == "Tropical - monsoon")
-
-  # Logical layout for each case now
-  # extract_cea_input_data(monsoonEvaluationsWorkSheet, 9)
-
-
   # Reporting period timestep
   # Step through reporting timesteps
   first_timestep <- FALSE
-
-  # Know how many CEAs ther are
-  number_of_ceas <- starting_cea_data_frame |> nrow()
   scenario_carbon_results <- list()
 
   for (current_tidal_range in tidal_range_hypotheses) {
-    # Copy out the initial dataframe case to use for htis loop
+    # Copy out the initial dataframe case to use for this loop
     new_estimated_cea_data <- starting_cea_data_frame
 
     # Calculate the constants used in STPI value
@@ -356,63 +409,15 @@ if (reestimate_carbon_sequestration) {
     }
   }
 
-  # Do the three actual scenarios for comparison carbon sink estimates
-  # # 1 DEM
-  # # 2 DEM + onsite tidal measurement
-  # # 3 HEC-RAS + onsite tidal measurement
-
-  # for (current_tidal_range in tidal_range_hypotheses){
-  #   # Copy out the initial dataframe case to use for htis loop
-  #   new_estimated_cea_data <- starting_cea_data_frame
-  #
-  #   # Calculate the constants used in STPI value
-  #   current_to_actual_tidal_range <- (current_tidal_range - tidal_range_onsite)
-  #   implied_new_actual_ahd_hat <- heighest_astronomical_tide_ahd + current_to_actual_tidal_range / 2
-  #   implied_new_mean_tidal_height <- calculate_mean_tidal_height(implied_new_actual_ahd_hat, current_tidal_range)  # Shouldn't change
-  #
-  #   first_timestep <- TRUE
-  #   time_period_steps <- seq(from=0, to=permancence_period_years, by=reporting_time_step_years) |> tail(-1)
-  #
-  #   for (time_period_step in time_period_steps){
-  #     # Create the new cea data with new frames and so-on
-  #     # Updates tidal height, CEA area, New CEA or first, Tidal introduction
-  #     new_estimated_cea_data <- estimate_new_cea_dataframe(new_estimated_cea_data,
-  #                                                          current_tidal_range,
-  #                                                          raster_tibble,
-  #                                                          implied_new_mean_tidal_height,
-  #                                                          implied_new_actual_ahd_hat,
-  #                                                          relevant_stpi_mapping_table,
-  #                                                          first_timestep)
-  #
-  #     total_cea_area_in_scenario <- new_estimated_cea_data$`CEA area (ACEAi) (ha)`
-  #
-  #     # Update the excel spreadsheet
-  #     update_excel_results(monsoonEvaluationsWorkSheet, current_tidal_range, new_estimated_cea_data)
-  #
-  #     Sys.sleep(0.1)
-  #
-  #     # Extract the results for the current scenario
-  #     scenario_carbon_results[[as.character(current_tidal_range)]] <- extract_all_results_details(monsoonEvaluationsWorkSheet,
-  #                                                                                                 number_of_ceas) |>
-  #       lapply(function(x) x |>
-  #                dplyr::mutate(`Tidal range`=current_tidal_range, timestep=time_period_step,
-  #                              `Total hectares in CEAs`=total_cea_area_in_scenario))
-  #
-  #     # Update the CEA to set it for the next year if doing multiple timesteps; CUrrent reporting period becomes the last one and etc
-  #     new_estimated_cea_data <- prepare_for_next_time_step(new_estimated_cea_data, reporting_time_step_years)
-  #   }
-  # }
-
-
   # Close excel now that its no longer needed
-  xlApp$quit(save = "default")
+  xlApp$quit()
 }
 
-# Format overall results now for later carbon assessments
-# THERE ARE ASSUMPTION INVOLVED IN USING THIS LARGEST TOTAL SITE AREA FROM THE LARGEST POSSIBLE CEAS CALCULATED
-# IT IS ESSENTIALLY ASSUMING NOT POSSIBLE ALTERNATE USE FOR LAND IN CARBON EMISSIONS IF IN THE CALCULATIONS
-# IE WE AREN"T HANDLING PARTIAL EDGE CASES WHERE MAYBE MIXED LAND USE IS POSSIBLE IN A SCENARIO WITH SOME
-# SET ASIDE FOR ABATEMENT AND SOME USED FOR LIVESTOCK
+# Format overall results now for later carbon assessments:
+# There are assumptions involved in using the largest total site area from the largest possible CEAs calculated
+# It is essentially assuming it is not possible to arrange an alternate use for land in carbon-emissions us
+# i.e we aren't handing partial edge cases where maybe mixed land use is feasible with some land set aside for abatement
+# and other bits set aside for livestock.
 overall_tidal_results_file_path <- file.path(
   synthesised_data_dir,
   "overall_carbon_sequestration_estimates.xlsx"
@@ -441,199 +446,182 @@ if (reestimate_carbon_sequestration) {
   cea_results_over_tidal_differences <- readxl::read_xlsx(cea_tidal_results_file_path)
 }
 
-cea_total_carbon_abatement_series <- cea_results_over_tidal_differences |>
-  dplyr::filter(measure_type == "Total") |>
-  dplyr::group_by(`CEA number`, `Tidal range`) |>
-  dplyr::summarise(
-    `Total carbon abated` = sum(Measurement),
-    `Average Tonnes of CO2 abatement per Hectare per Year` = sum(Measurement) / max(`Original DEM CEA area (Hectares)`)
-  )
+if (stage_to_start_from <= analysis_stages_vectors[3]) {
+    cea_total_carbon_abatement_series <- cea_results_over_tidal_differences |>
+      dplyr::filter(measure_type == "Total") |>
+      dplyr::group_by(`CEA number`, `Tidal range`) |>
+      dplyr::summarise(
+        `Total carbon abated` = sum(Measurement),
+        `Average Tonnes of CO2 abatement per Hectare per Year` = sum(Measurement) / max(`Original DEM CEA area (Hectares)`)
+      )
 
-# Plot the results for each overall against the tidal range
-subscripted_nett_label <- expression(paste("Net abatement amount (tonnes CO"[2], "e)"))
-overall_carbon_abatement_expectations <- overall_results_over_tidal_differences |>
-  typical_pointed_ggplot_line_plot(
-    ., "Tidal range",
-    "Net abatement amount (Ar) (Tonnes CO2e)",
-    NULL
-  ) +
-  scale_color_grey() +
-  theme(legend.position = "none") +
-  ggplot2::labs(
-    x = "Tidal range (m)",
-    y = subscripted_nett_label
-  )
+    # Plot the results for each overall against the tidal range
+    subscripted_nett_label <- expression(paste("Net abatement amount (tonnes CO"[2], "e)"))
+    overall_carbon_abatement_expectations <- overall_results_over_tidal_differences |>
+      typical_pointed_ggplot_line_plot(
+        "Tidal range",
+        "Net abatement amount (Ar) (Tonnes CO2e)",
+        NULL
+      ) +
+      scale_color_grey() +
+      theme(legend.position = "none") +
+      ggplot2::labs(
+        x = "Tidal range (m)",
+        y = subscripted_nett_label
+      )
 
-subscripted_average_label <- expression(paste("Average abatement (tonnes CO"[2], "e ha"^-1, " yr"^-1, ")"))
-overall_carbon_abatement_expectations_per_area_year <- overall_results_over_tidal_differences |>
-  typical_pointed_ggplot_line_plot(
-    ., "Tidal range",
-    "Average Tonnes of CO2 abatement per Hectare per Year",
-    NULL
-  ) +
-  ggplot2::labs(
-    x = "Tidal range (m)",
-    y = subscripted_average_label
-  ) +
-  scale_color_grey() +
-  theme(legend.position = "none")
+    subscripted_average_label <- expression(paste("Average abatement (tonnes CO"[2], "e ha"^-1, " yr"^-1, ")"))
+    overall_carbon_abatement_expectations_per_area_year <- overall_results_over_tidal_differences |>
+      typical_pointed_ggplot_line_plot(
+        "Tidal range",
+        "Average Tonnes of CO2 abatement per Hectare per Year",
+        NULL
+      ) +
+      ggplot2::labs(
+        x = "Tidal range (m)",
+        y = subscripted_average_label
+      ) +
+      scale_color_grey() +
+      theme(legend.position = "none")
 
-# Calculate "break-even" carbon rates needed to match the grazing land rates
-# Calculate full sequence
-grazing_land_reduced_rate <- grazing_land_reduced_selection |>
-  dplyr::filter(
-    `Scenario for hectares of usable land` == "Current (56 ha)",
-    `Reference grazing revenue per hectare per year` == cattle_revenue_per_hectare_per_year
-  ) |>
-  dplyr::pull(`Annualised Site revenue`)
+    # Calculate "break-even" carbon rates needed to match the grazing land rates
+    # Calculate full sequence
+    grazing_land_reduced_rate <- grazing_land_reduced_selection |>
+      dplyr::filter(
+        `Scenario for hectares of usable land` == "Current (56 ha)",
+        `Reference grazing revenue per hectare per year` == cattle_revenue_per_hectare_per_year
+      ) |>
+      dplyr::pull(`Annualised Site revenue`)
 
-break_even_carbon_price_for_scenario <- overall_results_over_tidal_differences |>
-  dplyr::mutate(`ACCU break even price` = grazing_land_reduced_rate / `Average Tonnes of CO2 abatement per Hectare per Year`) |>
-  dplyr::select(`Tidal range`, `Average Tonnes of CO2 abatement per Hectare per Year`, `ACCU break even price`)
+    break_even_carbon_price_for_scenario <- overall_results_over_tidal_differences |>
+      dplyr::mutate(`ACCU break even price` = grazing_land_reduced_rate / `Average Tonnes of CO2 abatement per Hectare per Year`) |>
+      dplyr::select(`Tidal range`, `Average Tonnes of CO2 abatement per Hectare per Year`, `ACCU break even price`)
 
-# Combined the graphs to scaled
-combined_carbon_plots <- cowplot::plot_grid(overall_carbon_abatement_expectations,
-  overall_carbon_abatement_expectations_per_area_year,
-  labels = c("a.", "b."),
-  label_size = 16, label_y = 1.01
-)
+    # Combined the graphs to scaled
+    combined_carbon_plots <- cowplot::plot_grid(
+        overall_carbon_abatement_expectations,
+        overall_carbon_abatement_expectations_per_area_year,
+        labels = c("a.", "b."),
+        label_size = 16, label_y = 1.01
+    )
 
-cowplot::save_plot(file.path(figures_dir, "carbon_sink_estimates.png"),
-  combined_carbon_plots,
-  base_width = 13,
-  base_height = 7
-)
+    combined_carbon_plot_path <- file.path(figures_dir, "carbon_sink_estimates.png")
+    cowplot::save_plot(
+        combined_carbon_plot_path,
+        combined_carbon_plots,
+        base_width = 13,
+        base_height = 7
+    )
 
-# CEA level results
-cea_carbon_abatement_expectations <- cea_total_carbon_abatement_series |>
-  typical_pointed_ggplot_line_plot(., "Tidal range", "Total carbon abated", "CEA number") +
-  labs(x = "Tidal range (m)", y = subscripted_nett_label) +
-  viridis::scale_color_viridis(discrete = TRUE) +
-  theme(legend.title = element_blank())
+    # CEA level results
+    cea_carbon_abatement_expectations <- cea_total_carbon_abatement_series |>
+        typical_pointed_ggplot_line_plot("Tidal range", "Total carbon abated", "CEA number") +
+        ggplot2::labs(x = "Tidal range (m)", y = subscripted_nett_label) +
+        ggplot2::scale_colour_viridis_d() +
+        ggplot2::theme(legend.title = element_blank())
 
-ggsave(file.path(figures_dir, "cea_level_carbon_estimates.png"),
-  cea_carbon_abatement_expectations,
-  width = 10
-)
+    cea_carbon_abatement_path <- file.path(figures_dir, "cea_level_carbon_estimates.png")
+    ggsave(
+        cea_carbon_abatement_path,
+        cea_carbon_abatement_expectations,
+        width = 10
+    )
 
-# Possible ACCU prices values
-tidal_range_carbon_price_scenarios <- calculate_scenario_annual_costings(
-  overall_results_over_tidal_differences, accu_considered_matrix_prices
-)
+    # Possible ACCU prices values
+    tidal_range_carbon_price_scenarios <- calculate_scenario_annual_costings(
+      overall_results_over_tidal_differences, accu_considered_matrix_prices
+    )
 
-# Heatmap of the total land value
-colour_scale_limits_viridis_c <- tidal_range_carbon_price_scenarios$`Annualised Site revenue` |>
-  min_max_vec()
+    # Heatmap of the total land value
+    colour_scale_limits_viridis_c <- tidal_range_carbon_price_scenarios$`Annualised Site revenue` |>
+      min_max_vec()
 
-# Small vertical lines intercept
-onsite_tidal_ranges <- tibble::tribble(
-  ~`Tidal measurement`, ~`Tidal range`,
-  "Nearest port", 3.58,
-  "Measured tides", 1.859
-)
+    # Small vertical lines intercept
+    onsite_tidal_ranges <- tibble::tribble(
+      ~`Tidal measurement`, ~`Tidal range`,
+      "Nearest port", 3.58,
+      "Measured tides", 1.859
+    )
 
-# Label expressions
-land_revenue_fill_expression <- expression(paste("Revenue ($ ha"^-1, " yr"^-1, ")"))
-carbon_price_expression <- expression(paste("Carbon price ($ AUD tCO"[2], "e"^-1, ")"))
+    # Label expressions
+    land_revenue_fill_expression <- expression(paste("Revenue ($ ha"^-1, " yr"^-1, ")"))
+    carbon_price_expression <- expression(paste("Carbon price ($ AUD tCO"[2], "e"^-1, ")"))
 
-# Build a potential contours dataset
-land_revenue_steps_by_hectares <- grazing_land_full_pairings |>
-  dplyr::filter((`Productive grazing land (ha)` %% 20) == 0) |>
-  dplyr::pull(`Annualised Site revenue ($ / ha / yr)`)
+    # Build a potential contours dataset
+    land_revenue_steps_by_hectares <- grazing_land_full_pairings |>
+      dplyr::filter((`Productive grazing land (ha)` %% 20) == 0,
+                    `Reference grazing revenue per hectare per year` == cattle_revenue_per_hectare) |>
+      dplyr::pull(`Annualised Site revenue ($ / ha / yr)`)
 
-land_revenue_by_steps <- seq(0, 1000, 200)
+    land_revenue_by_steps <- seq(0, 1000, 200)
 
+    carbon_site_revenue_plot <- build_underlying_heatmap(
+      tidal_range_carbon_price_scenarios,
+      "Tidal range", "Carbon price per tonne", "Annualised Site revenue"
+    ) +
+      ggplot2::labs(
+        x = "Tidal range (m)", y = carbon_price_expression,
+        fill = land_revenue_fill_expression
+      ) +
+        ggplot2::scale_fill_viridis_c(limits = colour_scale_limits_viridis_c) +
+        ggplot2::geom_vline(
+            data = onsite_tidal_ranges,
+            aes(xintercept = `Tidal range`, linetype = `Tidal measurement`),
+            colour = "black",
+            lwd = 1.1
+      )
 
-carbon_site_revenue_plot <- build_underlying_heatmap(
-  tidal_range_carbon_price_scenarios,
-  "Tidal range", "Carbon price per tonne", "Annualised Site revenue"
-) +
-  ggplot2::labs(
-    x = "Tidal range (m)", y = carbon_price_expression,
-    fill = land_revenue_fill_expression
-  ) +
-  scale_fill_viridis_c(limits = colour_scale_limits_viridis_c) +
-  geom_vline(
-    data = onsite_tidal_ranges,
-    aes(xintercept = `Tidal range`, linetype = `Tidal measurement`),
-    colour = "black",
-    lwd = 1.1
-  )
+    carbon_site_tiles_with_contour <- carbon_site_revenue_plot +
+        geom_contour(aes(z = `Annualised Site revenue`),
+                     breaks = land_revenue_by_steps,
+                     lwd = 1.1,
+                     colour = "grey"
+                     ) +
+        directlabels::geom_dl(aes(label = ..level.., z = `Annualised Site revenue`),
+                              method = "bottom.pieces",
+                              stat = "contour", breaks = land_revenue_by_steps,
+                              hjust = 0.5
+                              )
+    carbon_cattle_revenue_heatmap_path <- file.path(figures_dir, "tidal_to_carbon_revenue_with_contours.png")
+    ggplot2::ggsave(carbon_cattle_revenue_heatmap_path, carbon_site_tiles_with_contour)
 
-carbon_site_tiles_with_contour <- carbon_site_revenue_plot +
-  geom_contour(aes(z = `Annualised Site revenue`),
-    breaks = land_revenue_by_steps,
-    lwd = 1.1,
-    colour = "grey"
-  ) +
-  directlabels::geom_dl(aes(label = ..level.., z = `Annualised Site revenue`),
-    method = "bottom.pieces",
-    stat = "contour", breaks = land_revenue_by_steps,
-    hjust = 0.5
-  )
-ggplot2::ggsave(file.path(figures_dir, "tile_with_contours.png"), carbon_site_tiles_with_contour)
+    cattle_revenue_plot <- grazing_land_reduced_selection |>
+        dplyr::filter(`Reference grazing revenue per hectare per year` == cattle_revenue_per_hectare_per_year) |>
+        dplyr::mutate(
+            `Scenario for hectares of usable land` = factor(
+                `Scenario for hectares of usable land`,
+                levels = grazing_land_scenario_name)) |>
+        ggplot2::ggplot(aes(x = `Tidal range (m)`, y = `Scenario for hectares of usable land`, fill = `Annualised Site revenue`)) +
+        ggplot2::geom_tile(colour = "black") +
+        ggplot2::theme_cowplot() +
+        ggplot2::labs(
+            y = "Grazing land scenario",
+            fill = land_revenue_fill_expression,
+            x = ""
+            ) + # Apply scale_colour_brewer function
+        ggplot2::scale_fill_viridis_c(limits = colour_scale_limits_viridis_c) +
+        ggplot2::theme(
+            axis.ticks.x = element_blank(),
+            axis.text.x = element_blank()
+            )
 
-cattle_revenue_plot <- grazing_land_reduced_selection |>
-  dplyr::filter(`Reference grazing revenue per hectare per year` == cattle_revenue_per_hectare_per_year) |>
-  dplyr::mutate(`Scenario for hectares of usable land` = factor(
-    `Scenario for hectares of usable land`,
-    levels = c("Entire site (79 ha)", "Arbitrary (60 ha)", "Current (56 ha)")
-  )) |>
-  ggplot(aes(`Tidal range (m)`, `Scenario for hectares of usable land`, fill = `Annualised Site revenue`)) +
-  geom_tile(colour = "black") +
-  theme_cowplot() +
-  labs(
-    y = "Grazing land scenario",
-    fill = land_revenue_fill_expression,
-    x = ""
-  ) + # Apply scale_colour_brewer function
-  scale_fill_viridis_c(limits = colour_scale_limits_viridis_c) +
-  theme(
-    axis.ticks.x = element_blank(),
-    axis.text.x = element_blank()
-  )
+    combined_revenue_plots <- plot_grid(
+      cattle_revenue_plot + ggplot2::theme(legend.position = "none"),
+      carbon_site_revenue_plot,
+      labels = c("a.", "b. "),
+      rel_widths = c(0.4, 1),
+      label_y = 1.01
+    )
 
-combined_revenue_plots <- plot_grid(
-  cattle_revenue_plot + theme(legend.position = "none"),
-  carbon_site_revenue_plot,
-  labels = c("a.", "b. "),
-  rel_widths = c(0.4, 1),
-  label_y = 1.01
-)
+    combined_revenue_plot_path <- file.path(figures_dir, "heatplot_of_accu_tidal_range_land_value_pairs.png")
+    save_plot(
+        combined_revenue_plot_path,
+        combined_revenue_plots,
+        base_width = 13,
+        base_height = 8
+    )
 
-save_plot(file.path(figures_dir, "heatplot_of_accu_tidal_range_land_value_pairs.png"),
-  combined_revenue_plots,
-  base_width = 13,
-  base_height = 8
-)
-
-# Add a less scenario specific grazing plot land-use
-grazing_land_full_pairings |>
-  dplyr::filter() |>
-  ggplot(aes(
-    x = `Tidal range (m)`,
-    y = `Productive grazing land (ha)`, fill = `Annualised Site revenue ($ / ha / yr)`
-  )) +
-  geom_tile() +
-  theme_cowplot() +
-  labs(
-    y = "Grazing land scenario",
-    fill = land_revenue_fill_expression,
-    x = ""
-  ) + # Apply scale_colour_brewer function
-  scale_fill_viridis_c(limits = colour_scale_limits_viridis_c) +
-  theme(
-    axis.ticks.x = element_blank(),
-    axis.text.x = element_blank()
-  ) +
-  geom_hline(
-    data = grazing_land_reduced_selection,
-    aes(yintercept = grazing_land_available, linetype = `Scenario for hectares of usable land`),
-    colour = "black",
-    lwd = 1.1
-  )
-
-
+}
 ########################################################################################
 # Evaluation of the perfect value of information and sample value of information       #
 ########################################################################################
@@ -666,10 +654,9 @@ full_dist_array_dim <- c(n_inundation_opt, n_tidal_range_opt, n_inundation_opt, 
 full_indundation_array_dim <- c(n_inundation_opt, 1, n_inundation_opt, 1)
 full_tidal_range_array_dim <- c(1, n_tidal_range_opt, 1, n_tidal_range_opt)
 
-# Note that generic apply functions for the right margins in different scenarios in in defineid functions
+# Note that generic apply functions for the right margins in different scenarios in defined functions
 # apply_and_retain_actual_dims
 # apply_and_retain_sample_dims
-
 
 # Prior beliefs
 # Tidal range
@@ -688,7 +675,11 @@ inundation_range_prior_distribution <- sapply(
 )
 
 # Combine the two for the joint prior distribution
-prior_joint_distribution <- inundation_range_prior_distribution * tide_vector_to_joint_array(tidal_range_prior_distribution, tidal_range_actual_array_dim, n_inundation_opt)
+prior_joint_distribution <- (inundation_range_prior_distribution *
+                                 tide_vector_to_joint_array(
+                                     tidal_range_prior_distribution,
+                                     tidal_range_actual_array_dim,
+                                     n_inundation_opt))
 
 prior_inundation_dist <- prior_joint_distribution |> rowSums()
 
@@ -743,8 +734,11 @@ combined_prior_belief_plots <- plot_grid(
   nrow = 2
 )
 
-save_plot(file.path(figures_dir, "prior_beliefs.png"), combined_prior_belief_plots,
-  base_height = 6, base_width = 11
+combined_prior_beliefs_path <- file.path(figures_dir, "prior_beliefs.png")
+save_plot(
+    combined_prior_beliefs_path,
+    combined_prior_belief_plots,
+    base_height = 6, base_width = 11
 )
 
 # Three scenarios specify outcomes
@@ -762,14 +756,15 @@ scenario_inundation_bias <- c(0, 0, 0, 0, 0)
 scenario_inundation_uncertainty <- c(2, 2, 1, 1, 4)
 
 # Prepare generic values based on joint distribution
-# KEY ASSUMPTION - GIVEN TIDAL RANGE IMPLIES THE INUNDATION AS ITS LINKED TO LAND HIEGHT
-# DID THIS AS LINEAR WEIGHTING OF LAND ACTUALLY FLAGGED AS USUABLE IN EACH CASE
-# ITS ASSUMING DEVIATION IN EACH CASE IS UNIFORMLY RANDOM
-# OVERALL SITE AREA AS total_site_area 78.87309
-# GRAZING AREA AS grazing_site_rea 56.16916
-# CATTLE REVENUE PER YEAR (cattle_revenue_per_hectare_per_year) 976.8
-actual_cea_values_in_tidal_scenario <- (overall_results_over_tidal_differences$`Total hectares in CEAs` |>
-  array(dim = tidal_range_actual_array_dim))
+# Key assumption - given tidal range implies the inundation as its linked to land height
+# did this as linear weighting of land flagged as usable (i.e not flooded) in each case
+# It's assuming deviation in each case is uniformly random which is inaccurate
+# overall site area as 78.87309
+# grazing area as 56.16916
+# reference cattle revenue per year as 976.8
+actual_cea_values_in_tidal_scenario <- (
+    overall_results_over_tidal_differences$`Total hectares in CEAs` |>
+        array(dim = tidal_range_actual_array_dim))
 
 inundation_sequence_matrix <- (inundation_value_sequence |>
   array(dim = inundation_actual_array_dim))
@@ -792,63 +787,83 @@ fraction_site_site_not_flooded <- 1 - fraction_of_site_flooded
 reweighted_scenario_carbon_sink <- array(carbon_abatement_in_tidal_scenario, dim = tidal_range_actual_array_dim)[one_array(n_inundation_opt), ] * reweighting_factors_of_cea_weight
 
 # Uses theoretical inundation to calculate the cattle revenue inputs and so-on
-cattle_revenue_scenario_results <- list()
+decision_ordering <- c("Use for grazing land", "Use for carbon sequestration")
 
+cattle_revenue_scenario_results <- list()
+cattle_prior_decision_payoff <- list()
 for (revenue_option in cattle_revenue_per_hectare_options) {
   cattle_revenue_key <- paste(revenue_option)
 
   cattle_revenue_scenario_results[[cattle_revenue_key]] <- list()
 
-
+  # calculate the values needed
   cattle_inundation_scenario_revenue <- (fraction_site_site_not_flooded *
     grazing_site_rea *
     revenue_option)
-
-  cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_revenue"]] <- (
-    cattle_inundation_scenario_revenue
-  )
 
   cattle_full_scenario_revenue_matrix <- array(cattle_inundation_scenario_revenue,
     dim = inundation_actual_array_dim
   )[, one_array(n_tidal_range_opt)]
 
-  cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]] <- (
-    cattle_full_scenario_revenue_matrix
-  )
-
   cattle_revenue_joint_decision_payoff <- sum(cattle_full_scenario_revenue_matrix * prior_joint_distribution)
-
-  cattle_revenue_scenario_results[[cattle_revenue_key]][["joint_payoff"]] <- (
-    cattle_revenue_joint_decision_payoff
-  )
 
   expected_cattle_payoff_in_every_sample_scenario <- array(
     cattle_full_scenario_revenue_matrix,
     dim = actual_dist_array_dim
   )[one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ]
 
+  # Save the results out
+  cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_revenue"]] <- (
+      cattle_inundation_scenario_revenue
+  )
+
+  cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]] <- (
+      cattle_full_scenario_revenue_matrix
+  )
+
+  cattle_revenue_scenario_results[[cattle_revenue_key]][["joint_payoff"]] <- (
+      cattle_revenue_joint_decision_payoff
+  )
+
   cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_payoff"]] <- (
     expected_cattle_payoff_in_every_sample_scenario
   )
+
+  cattle_prior_decision_payoff[[cattle_revenue_key]] <- cattle_revenue_joint_decision_payoff
 }
 
+# Hopefully belows adjustment will cut runtime by >30% as would move one expensive calculation out of innermost loop
+latest_real_carbon_price_estimate <- 33.8
+accu_price_sequence_with_latest <- sort(c(accu_considered_matrix_prices, latest_real_carbon_price_estimate))
 
-# cattle_full_scenario_revenue_matrix <- (rep(cattle_inundation_scenario_revenue,
-#                                             n_tidal_range_opt) |>
-#                                           matrix(ncol=n_tidal_range_opt,  byrow=FALSE))
+# Calculate expected payoff for carbon in prior belief scenario at carbon price
+carbon_decision_payoff <- list()
+for (current_carbon_price in accu_price_sequence_with_latest) {
+    # Key for storing results
+    current_price_key <- paste(current_carbon_price)
+    carbon_revenue_for_scenario <- reweighted_scenario_carbon_sink * current_carbon_price / permancence_period_years
+
+    carbon_payoff_at_price <- sum(prior_joint_distribution * carbon_revenue_for_scenario)
+
+    carbon_decision_payoff[[current_price_key]] <- carbon_payoff_at_price
+}
+
+# Calculate expected payoff for cattle in prior belief scenario at cattle revenue estimate
+# Done slightly earlier with other cattle payoff calcs
+
+# Calculate the value of perfect information across each pairing of possible carbon pricing + cattle pricing
+
+# Go into the samples then to work out sample information
 
 
 
-# ACtual outcome determines payoff not sample estiamte -> cast dimension to actual and then replicate across all sample values
 
+# Actual outcome determines payoff not sample estimate -> cast dimension to actual and then replicate across all sample values
 # loop for one specific value
 scenario_key_graphs <- list()
 scenario_key_data <- list()
-latest_real_carbon_price_estimate <- 33.8
-# accu_price_sequence_with_latest <- sort(c(accu_considered_matrix_prices, latest_real_carbon_price_estimate))
 
-# temporary override for speed
-accu_price_sequence_with_latest <- sort(c(accu_considered_matrix_prices, latest_real_carbon_price_estimate))
+
 
 for (scenario_id in (seq(sampling_scenario_order))) {
   scenario_name_key <- sampling_scenario_order[scenario_id]
@@ -905,8 +920,10 @@ for (scenario_id in (seq(sampling_scenario_order))) {
     )
   )
 
-  save_plot(file.path(figures_dir, paste(scenario_name_key, "conditional_sample_distribution.png", sep = "_")), sample_distributions_of_outcomes)
-
+  scenario_joint_heatmap_path <- file.path(
+      figures_dir,
+      paste(scenario_name_key, "conditional_sample_distribution.png", sep = "_"))
+  save_plot(scenario_joint_heatmap_path, sample_distributions_of_outcomes)
 
 
   # Now expand out every inundation, tidal range pair and then our belief from that join distribution
@@ -919,12 +936,23 @@ for (scenario_id in (seq(sampling_scenario_order))) {
     array(dim = full_tidal_range_array_dim)
 
   # Dependent on assumption from the prior belief
-  full_conditioned_sample_distribution <- inundation_belief_reshape[, one_array(n_tidal_range_opt), , one_array(n_tidal_range_opt)] * tidal_range_belief_reshape[one_array(n_inundation_opt), , one_array(n_inundation_opt), ]
+  full_conditioned_sample_distribution <- (
+      inundation_belief_reshape[,
+                                one_array(n_tidal_range_opt),
+                                ,
+                                one_array(n_tidal_range_opt)] *
+
+      tidal_range_belief_reshape[one_array(n_inundation_opt),
+                                 ,
+                                 one_array(n_inundation_opt),
+                                 ])
 
   # Should all be ones for this test
   # conditional_sample_distribution_test <- full_conditioned_sample_distribution |> apply(MARGIN=c(3, 4), sum)
   # all.equal(conditional_sample_distribution_test, array(1, dim=c(n_inundation_opt, n_tidal_range_opt)))
-  full_joint_sample_actual_distribution <- full_conditioned_sample_distribution * array(prior_joint_distribution, dim = actual_dist_array_dim)[one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ]
+  full_joint_sample_actual_distribution <- (full_conditioned_sample_distribution *
+                                                array(prior_joint_distribution, dim = actual_dist_array_dim)[
+                                                    one_array(n_inundation_opt), one_array(n_tidal_range_opt), , ])
 
   # Recover the prior distribution joint values - should pass
   # all.equal(prior_joint_distribution, apply(full_joint_sample_actual_distribution, MARGIN=c(3, 4), sum))
@@ -933,7 +961,7 @@ for (scenario_id in (seq(sampling_scenario_order))) {
 
   # Work out the chance of seeing some sample result for inundation and tidal range
   joint_sample_distribution_array <- full_joint_sample_actual_distribution |>
-    apply_and_retain_sample_dims(., sum) |>
+    apply_and_retain_sample_dims(sum) |>
     array(dim = sample_dist_array_dim)
 
   implied_sample_tidal_range_prob <- joint_sample_distribution_array |> apply(MARGIN = c(2), FUN = sum)
@@ -993,25 +1021,33 @@ for (scenario_id in (seq(sampling_scenario_order))) {
     hjust = -0.5
   )
 
-  save_plot(file.path(figures_dir, paste(scenario_name_key, "sample_distribution_summary.png", sep = "_")), sample_distributions_of_outcomes,
-    base_height = 9, base_width = 12
+  implied_joint_sample_distribution_path <- file.path(
+      figures_dir,
+      paste(scenario_name_key, "sample_distribution_summary.png", sep = "_")
+      )
+
+  save_plot(
+      implied_joint_sample_distribution_path,
+      sample_distributions_of_outcomes,
+      base_height = 9, base_width = 12
   )
 
   # Combined prior sample
-  posterior_probability_distribution <- replace_matrix_nans(full_joint_sample_actual_distribution / joint_sample_distribution_array[, , one_array(n_inundation_opt), one_array(n_tidal_range_opt)])
+  posterior_probability_distribution <- replace_matrix_nans(
+      full_joint_sample_actual_distribution /
+          joint_sample_distribution_array[, , one_array(n_inundation_opt), one_array(n_tidal_range_opt)])
 
   # Check all conditional distributions sum to 1
   # all.equal(posterior_probability_distribution |> apply(MARGIN=c(1, 2), FUN=sum), array(1, dim=c(n_inundation_opt, n_tidal_range_opt)))
 
-
-  # For every theoretical ACCU price, calculate utility, EVPI, and EVSI
+  # For every theoretical ACCU price and cattle revenue price, calculate utility, EVPI, and EVSI
 
   # Reshape sample joint distribution
   reshaped_joint_sample_distribution <- array(joint_sample_distribution_array, dim = sample_dist_array_dim)
   complete_full_reshaped_joint_sample_dist_array <- reshaped_joint_sample_distribution[, , one_array(n_inundation_opt), one_array(n_tidal_range_opt)]
 
   # Use the calculated distributions to now do all of the value of information estimates
-  decision_ordering <- c("Use for grazing land", "Use for carbon sequestration")
+
   # best_prior_decision_in_scenario <- list()
   # prior_decision_utility <- list()
   # accu_scenario_evpi <- list()
@@ -1043,6 +1079,7 @@ for (scenario_id in (seq(sampling_scenario_order))) {
       expected_cattle_payoff_in_every_sample_scenario <- cattle_revenue_scenario_results[[cattle_revenue_key]][["scenario_payoff"]]
 
 
+      # Could separate out the cattle payment loop and carbon payment loop as well for prior payments
       full_reveneue_pricing_comparisons <- array(
         c(
           cattle_full_scenario_revenue_matrix,
@@ -1052,11 +1089,15 @@ for (scenario_id in (seq(sampling_scenario_order))) {
       )
 
       # Expected Decision
-      decision_payoff_overall <- (full_reveneue_pricing_comparisons * array(prior_joint_distribution, dim = c(dim(prior_joint_distribution), 1))[, , one_array(2)]) |> apply(MARGIN = c(3), sum)
+      decision_payoff_overall <- (full_reveneue_pricing_comparisons *
+                                      array(prior_joint_distribution,
+                                            dim = c(dim(prior_joint_distribution), 1))[, , one_array(2)])
+      |> apply(MARGIN = c(3), sum)
       break_even_carbon_price_in_prior <- (decision_payoff_overall[1] / decision_payoff_overall[2] * current_carbon_price)
 
 
       # Value of perfect information
+      # Could move EVPI outside of the scenario loops
       best_decision_payoff <- (apply(
         full_reveneue_pricing_comparisons,
         c(1, 2), max
@@ -1121,22 +1162,6 @@ for (scenario_id in (seq(sampling_scenario_order))) {
   combined_scenario_results <- scenario_key_metrics |>
     lapply(dplyr::bind_rows) |>
     dplyr::bind_rows()
-  #
-  #   prior_decision_outcome <- best_prior_decision_in_scenario |>
-  #     lapply(dplyr::bind_rows) |>
-  #     dplyr::bind_rows()
-  #
-  #   carbon_price_decision_utility <- prior_decision_utility |>
-  #     lapply(dplyr::bind_rows) |>
-  #     dplyr::bind_rows()
-  #
-  #   prior_decision_utility_evpi <- accu_scenario_evpi |>
-  #     lapply(dplyr::bind_rows) |>
-  #     dplyr::bind_rows()
-  #
-  #   prior_decision_utility_evsi <- accu_scenario_evsi |>
-  #     lapply(dplyr::bind_rows) |>
-  #     dplyr::bind_rows()
 
   # Visualise the combined results
   colour_scale_limits_viridis_c <- tidal_range_carbon_price_scenarios$`Annualised Site revenue` |>
@@ -1154,19 +1179,23 @@ for (scenario_id in (seq(sampling_scenario_order))) {
     pivot_longer(-`Carbon price ($ / tonne)`, names_to = "Measure", values_to = "Value")
 
   voi_heatmap <- long_form_value_of_information |>
-    ggplot(aes(x = `Carbon price ($ / tonne)`, y = Measure, fill = Value)) +
-    geom_tile(colour = "Black") +
-    theme_cowplot() +
-    scale_x_continuous(breaks = scales::pretty_breaks(n = 7), labels = scales::number_format()) +
-    scale_fill_viridis_c()
+    ggplot2::ggplot(aes(x = `Carbon price ($ / tonne)`, y = Measure, fill = Value)) +
+      ggplot2::geom_tile(colour = "Black") +
+      ggplot2::theme_cowplot() +
+      ggplot2::scale_x_continuous(breaks = scales::pretty_breaks(n = 7), labels = scales::number_format()) +
+      ggplot2::scale_fill_viridis_c()
 
-  ggsave(file.path(figures_dir, paste(scenario_name_key, "heatmap_of_voi_values.png", sep = "_")), voi_heatmap)
+  scenario_voi_heatmap_path <- file.path(figures_dir, paste(scenario_name_key, "heatmap_of_voi_values.png", sep = "_"))
+  ggplot2::ggsave(scenario_voi_heatmap_path, voi_heatmap)
+
+  combined_scenario_results_output_path <- file.path(
+      synthesised_data_dir,
+      paste(scenario_name_key, "event_scenarios_first_case.xlsx", sep = "_"))
 
   writexl::write_xlsx(
     combined_scenario_results,
-    file.path(synthesised_data_dir, paste(scenario_name_key, "event_scenarios_first_case.xlsx", sep = "_"))
+    combined_scenario_results_output_path
   )
-
 
   # Share out the results
   scenario_key_data[[scenario_name_key]] <- combined_scenario_results
@@ -1176,15 +1205,14 @@ for (scenario_id in (seq(sampling_scenario_order))) {
 # Combine and plot full scenario shared results
 # Payoff in and certainty of decision in every scenario
 # "Middle complexity" -> "Moderate complexity"
-
 full_scenario_voi_data <- scenario_key_data |>
   bind_rows()
 
+complete_scenario_data_path <- file.path(synthesised_data_dir, "combined_scenario_grazing_comparison.xlsx")
 full_scenario_voi_data |>
   writexl::write_xlsx(
-    file.path(synthesised_data_dir, "combined_scenario_grazing_comparison.xlsx")
+      complete_scenario_data_path
   )
-
 
 perfect_information_long_form <- full_scenario_voi_data |>
   dplyr::filter(`Cattle revenue ($ / He / yr)` == cattle_revenue_per_hectare_per_year) |>
@@ -1249,7 +1277,14 @@ value_of_information_plot_from_results <- combined_cases_scenario_evaluation_pre
   viridis::scale_color_viridis(discrete = TRUE)
 
 
-ggsave(file.path(figures_dir, "output_voi_evaluation.png"), value_of_information_plot_from_results)
+value_of_information_scenario_path <- file.path(figures_dir, "output_voi_evaluation.png")
+ggsave(value_of_information_scenario_path, value_of_information_plot_from_results)
 
+long_form_voi_data_path <- file.path(synthesised_data_dir, "voi_long_form.xlsx")
 combined_cases_scenario_evaluation_prettier |>
-  writexl::write_xlsx(file.path(synthesised_data_dir, "voi_long_form.xlsx"))
+  writexl::write_xlsx(long_form_voi_data_path)
+
+# Now think about how to do a good comparison at different cattle revenues
+# Weighted % of time carbon use is better than cattle
+
+# Increasing utility of sample information?

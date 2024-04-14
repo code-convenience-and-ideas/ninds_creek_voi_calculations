@@ -16,3 +16,9 @@ stage_to_start_from <- factor(
     levels = considered_analysis_stages,
     ordered = TRUE
 )
+
+analysis_stages_vectors <- factor(
+    considered_analysis_stages,
+    levels = considered_analysis_stages,
+    ordered = TRUE
+)
