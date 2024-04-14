@@ -1,0 +1,84 @@
+---
+author: "Alex Baker"
+output: [bookdown::html_document2]
+date:  "`r Sys.Date()`"
+title: "Notes on establishing priors and sample results"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load configuration script
+# Assumes config file is in the working directory
+# source(here::here('scripts', '01_configuration.R'))
+
+# Run the import of packages needed for the project
+# flog.info("Importing relevant packages for analysis")
+source(here::here('scripts', '0x_import.R'))
+```
+# Setting up the equations
+## Prior beliefs
+Let \(Z\) be a random variable representing the tidal height.  
+Let \(I\) be a random variable representing the hectares of land inundated at any point over the 25 years blueCAM period.  
+
+We have prior beliefs over both \(Z\) and \(I\) so that we can characterise the joint belief \(P(Z, I).\) However, via the chain rule we instead characterise two different distributions to model this join distribution.
+
+\(P(Z)=\) Our prior belief that a certain tidal range would occur.    
+\(P(I|Z)=\)Prior belief that a certain level of inundation would occur for a given tidal range.  
+
+The chain rule then gives us \(P(Z, I)=P(Z)P(Z|I).\)
+
+This characterisation of the prior belief was chosen as it is more intuitive that a landholder or research would have beliefs about the tidal range, and how much the land would flood for different ranges separately rather than a belief about the whole joint distribution.
+
+
+## Beliefs on sampling reliability.
+Many value of information analyses might consider a typical experiment for gathering sample information where they can consider how increasing samples size would increase confidence in the results. Here, each approach is run once on a given piece of land and done as an individual case study. Consequently, the characterisation of the reliability, and bias of the sample methods is defined wholely in the prior belief.
+
+There is some arbitrariness in setting a known, constant bias value which is easily corrected for.
+
+We define two new variables.
+
+Let \(S\) be the random variable for the tidal height measurement from some sampling method.  
+Let \(L\) be the random variable for the inundation prediction / measurement from some method.
+
+Our characterisation in then for the chance of a sample result given some "truth". So, for each possible real-state of the world, what would be the distribution of possible sample results.
+
+\[P(S, L | Z, I)=\text{The sample result (tide, indundation) we expect given some actual real result (tide, indundation).}\]
+
+
+We assume that that the reliability of the sampling method is only dependent on the feature it is measuring. If we know the tidal range, our method for measuring tidal range would not return a different result even if the inundation varied and similarly, our method for estimating inundation would would not return different results if we knew the actual inundation.
+
+\[P(S,L |Z, I)=P(S|Z)P(L|I)\]
+
+## Bayes theorem to calculat possible posterior
+Bayes theorem is applied in the standard way to combine the sampling beliefs with the prior beliefs to get the chance of some event given some sample result.
+
+\[P(Z, I | S, L)=\frac{P(S, L | Z, I)P(Z, I)}{P(S, L)}\].
+\[P(Z, I | S, L)=\frac{\left(P(S|Z)P(L|I)\right)\left(P(Z)P(Z|I)\right)}{P(S, L)}\].
+
+## The collection of decisions that can be made about the land
+We define another variable, \(D,\) which represents the decision for each piece of land. It is a binary variable indicating whether the land was committed to use for carbon abatement or kept for agricultural use.
+
+Carbon abatement can be estimated for each different prior scenario using the BlueCAM method published by the government.
+Combining the abatemennt estimates with various spot prices for an Australian Carbon Credit Units (ACCUs) to get the expected dollar value of using the land for carbon abatement.
+
+The specific cost of agricultural land use was not defined in advance and instead a grid of options was considered to see at what values would it be more financially sensible to collect information, or use the land in different ways. However, this grid was based on fractions of a published revenue per hectare per year value for cattle grazing.
+
+We let \(U(D, Z, I)\) represent the function representing utility of making a decision with value \(D\) for a given tidal range, \(Z\) and inundation \(I.\)
+
+## Calculating the value of Perfect information information
+The utility, U, of the best decision in from just the prior is simple:
+
+\[E[U]=\max_{d\in D} \int_{Z,I}U(D, Z, I)dz di\]
+
+Perfect information is treated as always making the correct decision in every prior belief scenario and subtracting the value of matching a straight decision on just the prior information.
+
+\[EVPI=\int_{Z,I} \max_{D} U(D, Z, I)dz di - E[U]\]
+
+
+## Calculating the value of sample information
+
+The expected value of the sample information is defined as the expected utility of taking an action after sampling, averaged across all of the possible sample results, minus the value of making a decision before collecting information.
+
+\[EVSI=\left(\int_{Z,I} \max_{D} U(D, Z, I)P(S, L | Z, I) P(Z, I)dz di ds dl\right) - E[U]\]
+
+# Modelling the prior beliefs in practice
