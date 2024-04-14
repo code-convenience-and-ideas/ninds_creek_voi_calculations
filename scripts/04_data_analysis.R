@@ -771,13 +771,6 @@ inundation_sequence_matrix <- (inundation_value_sequence |>
 
 carbon_abatement_in_tidal_scenario <- unname(overall_results_over_tidal_differences$`Net abatement amount (Ar) (Tonnes CO2e)`)
 
-#
-#
-#
-#
-# reweighting_factors_of_cea_weight <- create_belief_joint_dist(inundation_sequence_matrix,
-#                                                               1 / actual_cea_values_in_tidal_scenario)
-
 reweighting_factors_of_cea_weight <- (1 / actual_cea_values_in_tidal_scenario[one_array(n_inundation_opt), ]) * inundation_sequence_matrix[, one_array(n_tidal_range_opt)]
 
 fraction_of_site_flooded <- pmin(inundation_sequence_matrix / total_site_area, 1)
@@ -838,6 +831,7 @@ accu_price_sequence_with_latest <- sort(c(accu_considered_matrix_prices, latest_
 
 # Calculate expected payoff for carbon in prior belief scenario at carbon price
 carbon_decision_payoff <- list()
+carbon_scenario_revenue <- list()
 for (current_carbon_price in accu_price_sequence_with_latest) {
     # Key for storing results
     current_price_key <- paste(current_carbon_price)
@@ -846,10 +840,96 @@ for (current_carbon_price in accu_price_sequence_with_latest) {
     carbon_payoff_at_price <- sum(prior_joint_distribution * carbon_revenue_for_scenario)
 
     carbon_decision_payoff[[current_price_key]] <- carbon_payoff_at_price
+    carbon_scenario_revenue[[current_price_key]] <- carbon_revenue_for_scenario
 }
 
 # Calculate expected payoff for cattle in prior belief scenario at cattle revenue estimate
 # Done slightly earlier with other cattle payoff calcs
+decision_summary_in_price_scenario <- list()
+best_prior_decision_in_scenario <- list()
+evpi_in_scenario <- list()
+best_prior_payoff_in_scenario <- list()
+
+for (current_carbon_price in accu_price_sequence_with_latest) {
+    # Key for storing results
+    current_price_key <- paste(current_carbon_price)
+
+    # Pull out pre-calculated carbon scenario data
+    carbon_revenue_for_scenario <- carbon_scenario_revenue[[current_price_key]]
+    carbon_prior_payoff <- carbon_decision_payoff[[current_price_key]]
+
+    # Set up list for extra decision summary vairables
+    decision_summary_in_price_scenario[[current_price_key]] <- list()
+    best_prior_decision_in_scenario[[current_price_key]] <- list()
+    evpi_in_scenario[[current_price_key]] <- list()
+    best_prior_payoff_in_scenario[[current_price_key]] <- list()
+
+
+    for (revenue_option in cattle_revenue_per_hectare_options) {
+        cattle_revenue_key <- paste(revenue_option)
+
+        # Log a result
+        flog.info(glue::glue("Starting pre-calc for: ${current_price_key} ACCU, ${cattle_revenue_key} Cattle"))
+
+        # Pull out the pre-calculated cattle scenario data
+        cattle_full_scenario_revenue_matrix <- cattle_revenue_scenario_results[[cattle_revenue_key]][["revenue_matrix"]]
+
+        # Could separate out the cattle payment loop and carbon payment loop as well for prior payments
+        full_reveneue_pricing_comparisons <- array(
+            c(
+                cattle_full_scenario_revenue_matrix,
+                carbon_revenue_for_scenario
+            ),
+            dim = c(dim(cattle_full_scenario_revenue_matrix), 2)
+        )
+
+        # Expected Decision
+        cattle_prior_payoff <- cattle_prior_decision_payoff[[cattle_revenue_key]]
+
+        # break-even price comparison
+        break_even_carbon_price_in_prior <- (cattle_prior_payoff / carbon_prior_payoff * current_carbon_price)
+
+        # Value of perfect information
+        # Could move EVPI outside of the scenario loops
+        best_decision_payoff <- (apply(
+            full_reveneue_pricing_comparisons,
+            c(1, 2), max
+        ) * prior_joint_distribution) |> sum()
+        best_decision_index_group <- apply(full_reveneue_pricing_comparisons, c(1, 2), function(x) decision_ordering[which.max(x)])
+
+        # Raw split of decisions + prob_weighted split of decisions
+        best_decision_scenario_count <- data.frame(
+            best_decision = c(best_decision_index_group),
+            decision_weight = c(prior_joint_distribution),
+            count = 1 / length(best_decision_index_group)
+        )
+
+        # Finalise outputs for key metrics
+        combined_prior_payoffs_vec <- c(cattle_prior_payoff, carbon_prior_payoff)
+        prior_value_best_payoff <- pmax(combined_prior_payoffs_vec)
+        value_of_perfect_information <- best_decision_payoff - prior_value_best_payoff
+        best_prior_decision <- decision_ordering[which.max(combined_prior_payoffs_vec)]
+
+        # Store the various output values from the calculations
+        decision_summary_in_price_scenario[[current_price_key]][[cattle_revenue_key]] <- (
+            best_decision_scenario_count |>
+                dplyr::group_by(best_decision) |>
+                dplyr::summarise(
+                    `Prob weighted decision rate` = sum(decision_weight),
+                    `Raw scenario decision rate` = sum(count)
+                ) |>
+                dplyr::mutate(
+                    `Carbon price ($ / tonne)` = current_carbon_price,
+                    `Reference cattle revenue` = revenue_option,
+                    `Break even carbon price on prior` = break_even_carbon_price_in_prior
+                )
+        )
+
+        best_prior_decision_in_scenario[[current_price_key]][[cattle_revenue_key]] <- best_prior_decision
+        evpi_in_scenario[[current_price_key]][[cattle_revenue_key]] <- value_of_perfect_information
+        best_prior_payoff_in_scenario[[current_price_key]][[cattle_revenue_key]] <- prior_value_best_payoff
+    }
+}
 
 # Calculate the value of perfect information across each pairing of possible carbon pricing + cattle pricing
 
@@ -862,8 +942,6 @@ for (current_carbon_price in accu_price_sequence_with_latest) {
 # loop for one specific value
 scenario_key_graphs <- list()
 scenario_key_data <- list()
-
-
 
 for (scenario_id in (seq(sampling_scenario_order))) {
   scenario_name_key <- sampling_scenario_order[scenario_id]
