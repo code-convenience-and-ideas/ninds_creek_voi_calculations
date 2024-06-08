@@ -44,7 +44,7 @@ flog.logger("standard_logger",
             appender=flog.appender(appender.tee(default_log_file_path)))
 
 # Set the level of logging to perform e.g INFO and above, debugging, warnings, etc
-flog.threshold(futile.logger::INFO, name="standard_logger")
+flog.threshold(futile.logger::INFO, name = "standard_logger")
 
 # Capture errors and traceback in the main logger
 options(error = function() {

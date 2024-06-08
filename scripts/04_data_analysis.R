@@ -221,7 +221,7 @@ grazing_land_scenario_name <- c(
 
 # Setup up paths in advance
 reduced_land_section_path <- file.path(processeddata_dir, 'reducing_grazing_land_section.parquet')
-enumerated_grazing_land_path <- file.path(processeddata_dir, 'reducing_frazing_land_section.parquet')
+enumerated_grazing_land_path <- file.path(processeddata_dir, 'reducing_grazing_land_section.parquet')
 
 if (replot_site_relief_files) {
 
@@ -650,6 +650,26 @@ if (replot_carbon_sequestration) {
         base_height = 8
     )
 
+    # Create a combined CEA + Overall Site Plot for carbon sequestration
+    combined_site_cea_carbon_abatement_plots <- cowplot::plot_grid(
+      cea_carbon_abatement_expectations,
+      overall_carbon_abatement_expectations_per_area_year,
+      labels = c("a.", "b."),
+      label_size = 20,
+      ncol = 1)
+
+    combined_abatement_plot_path <- file.path(
+      figures_dir,
+      "combined_carbon_plot_of_carbon_abatement_cea_and_overall.png"
+    )
+
+    save_plot(
+      combined_abatement_plot_path,
+      combined_site_cea_carbon_abatement_plots,
+      base_width = 13,
+      base_height = 10
+    )
+
 }
 ########################################################################################
 # Evaluation of the perfect value of information and sample value of information       #
@@ -791,6 +811,9 @@ scenario_inundation_uncertainty <- c(2, 2, 1, 1, 4)
 # overall site area as 78.87309
 # grazing area as 56.16916
 # reference cattle revenue per year as 976.8
+latest_real_carbon_price_estimate <- 33.8
+decision_ordering <- c("Use for grazing land", "Use for carbon sequestration")
+
 complete_scenario_data_path <- file.path(synthesised_data_dir, "combined_scenario_grazing_comparison.xlsx")
 if (recalculate_voi){
 
@@ -812,8 +835,6 @@ if (recalculate_voi){
     reweighted_scenario_carbon_sink <- array(carbon_abatement_in_tidal_scenario, dim = tidal_range_actual_array_dim)[one_array(n_inundation_opt), ] * reweighting_factors_of_cea_weight
 
     # Uses theoretical inundation to calculate the cattle revenue inputs and so-on
-    decision_ordering <- c("Use for grazing land", "Use for carbon sequestration")
-
     cattle_revenue_scenario_results <- list()
     cattle_prior_decision_payoff <- list()
     for (revenue_option in cattle_revenue_per_hectare_options) {
@@ -858,7 +879,6 @@ if (recalculate_voi){
     }
 
     # Hopefully belows adjustment will cut runtime by >30% as would move one expensive calculation out of innermost loop
-    latest_real_carbon_price_estimate <- 33.8
     accu_price_sequence_with_latest <- sort(c(accu_considered_matrix_prices, latest_real_carbon_price_estimate))
 
     # Calculate expected payoff for carbon in prior belief scenario at carbon price
@@ -1420,6 +1440,36 @@ if (redo_voi_outcome_plots){
 
     relative_sample_info_path <- file.path(figures_dir, 'relative_sample_information_against_cattle_and_carbon.png')
     ggplot2::ggsave(relative_sample_info_path, sample_information_value_under_many_scenarios)
+
+    # Write out a specific alternative for table S5.1 in current paper to see if it address's
+    # Catherine's and Alices desire there. Will be sadly very wide
+    prior_land_use_nicer_name_mapping <- dplyr::tribble(
+      ~`Best Prior decision landuse`, ~`Best prior decision land use`,
+      "Use for grazing land", "Grazing",
+      "Use for carbon sequestration", "Carbon sequestration")
+
+    supplementary_table_name_remapping <- c(
+      "Carbon price ($ tCO2e-1)" = "Carbon price ($ / tonne)",
+      "Best prior decision land use" = "Best prior decision land use",
+      "Expected average annual return on prior decision ($ yr -1)" = "Expected annualised payoff on prior decision",
+      "Value of perfect information ($ yr-1)" = "Value of perfect information",
+      "Value of sample information ($ yr-1)" = "Value of sample information"
+    )
+
+    filtered_select_supplimentary_data <- full_scenario_voi_data |>
+      dplyr::filter(`Cattle revenue ($ / He / yr)` == cattle_revenue_per_hectare_per_year,
+                    ((`Carbon price ($ / tonne)` %% 10) == 0) | (`Carbon price ($ / tonne)` == latest_real_carbon_price_estimate)) |>
+      dplyr::left_join(prior_land_use_nicer_name_mapping) |>
+      dplyr::select(-`Cattle revenue ($ / He / yr)`, -`Best Prior decision landuse`) |>
+      dplyr::select(dplyr::all_of(supplementary_table_name_remapping), `Sampling Scenario`) |>
+      tidyr::pivot_wider(
+        names_from = `Sampling Scenario`,
+        values_from = `Value of sample information ($ yr-1)`,
+        names_glue = "Value of {stringr::str_to_lower(.name)} information ($ yr-1)"
+      )
+
+    filtered_select_supplimentary_data |>
+      writexl::write_xlsx(file.path(synthesised_data_dir, 'reformatted_sunplimentary_voi_data.xlsx'))
 
 }
 
