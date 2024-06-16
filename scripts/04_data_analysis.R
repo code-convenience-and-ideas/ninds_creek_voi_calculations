@@ -251,7 +251,6 @@ if (replot_site_relief_files) {
 } else {
     grazing_land_reduced_selection <- arrow::read_parquet(reduced_land_section_path)
     grazing_land_full_pairings <- arrow::read_parquet(enumerated_grazing_land_path)
-
 }
 
 ########################################################################################################
@@ -475,6 +474,10 @@ if (reestimate_carbon_sequestration) {
   cea_results_over_tidal_differences <- readxl::read_xlsx(cea_tidal_results_file_path)
 }
 
+# Label expressions - moved out of candidational due to reuse
+land_revenue_fill_expression <- expression(paste("Revenue ($ ha"^-1, " yr"^-1, ")"))
+carbon_price_expression <- expression(paste("Carbon price ($ AUD tCO"[2], "e"^-1, ")"))
+
 if (replot_carbon_sequestration) {
     cea_total_carbon_abatement_series <- cea_results_over_tidal_differences |>
       dplyr::filter(measure_type == "Total") |>
@@ -572,14 +575,10 @@ if (replot_carbon_sequestration) {
       "Measured tides", 1.859
     )
 
-    # Label expressions
-    land_revenue_fill_expression <- expression(paste("Revenue ($ ha"^-1, " yr"^-1, ")"))
-    carbon_price_expression <- expression(paste("Carbon price ($ AUD tCO"[2], "e"^-1, ")"))
-
     # Build a potential contours dataset
     land_revenue_steps_by_hectares <- grazing_land_full_pairings |>
       dplyr::filter((`Productive grazing land (ha)` %% 20) == 0,
-                    `Reference grazing revenue per hectare per year` == cattle_revenue_per_hectare) |>
+                    `Reference grazing revenue per hectare per year` == cattle_revenue_per_hectare_per_year) |>
       dplyr::pull(`Annualised Site revenue ($ / ha / yr)`)
 
     land_revenue_by_steps <- seq(0, 1000, 200)
@@ -622,7 +621,7 @@ if (replot_carbon_sequestration) {
                 levels = grazing_land_scenario_name)) |>
         ggplot2::ggplot(aes(x = `Tidal range (m)`, y = `Scenario for hectares of usable land`, fill = `Annualised Site revenue`)) +
         ggplot2::geom_tile(colour = "black") +
-        ggplot2::theme_cowplot() +
+        cowplot::theme_cowplot() +
         ggplot2::labs(
             y = "Grazing land scenario",
             fill = land_revenue_fill_expression,
@@ -642,12 +641,23 @@ if (replot_carbon_sequestration) {
       label_y = 1.01
     )
 
+    # Original quality saved plot
     combined_revenue_plot_path <- file.path(figures_dir, "heatplot_of_accu_tidal_range_land_value_pairs.png")
     save_plot(
         combined_revenue_plot_path,
         combined_revenue_plots,
         base_width = 13,
         base_height = 8
+    )
+
+    # Saving fig 5 at tiff to match journal requirements
+    combined_revenue_plot_tiff_path <- file.path(figures_dir, "heatplot_of_accu_tidal_range_land_value_pairs.tiff")
+    save_plot(
+      combined_revenue_plot_path,
+      combined_revenue_plots,
+      base_width = 13,
+      base_height = 8,
+      dpi = 300
     )
 
     # Create a combined CEA + Overall Site Plot for carbon sequestration
@@ -670,6 +680,21 @@ if (replot_carbon_sequestration) {
       base_height = 10
     )
 
+    # Creates explicit Tiff version of this plot for publication
+    # And explicitly puts dpi at requested 300
+    combined_abatement_plot_tiff_path <- file.path(
+      figures_dir,
+      "combined_carbon_plot_of_carbon_abatement_cea_and_overall.tiff"
+    )
+
+    save_plot(
+      combined_abatement_plot_tiff_path,
+      combined_site_cea_carbon_abatement_plots,
+      dpi = 300,
+      base_width = 13,
+      base_height = 10,
+
+    )
 }
 ########################################################################################
 # Evaluation of the perfect value of information and sample value of information       #
@@ -815,6 +840,7 @@ latest_real_carbon_price_estimate <- 33.8
 decision_ordering <- c("Use for grazing land", "Use for carbon sequestration")
 
 complete_scenario_data_path <- file.path(synthesised_data_dir, "combined_scenario_grazing_comparison.xlsx")
+scenario_decision_rate_data_path <- file.path(synthesised_data_dir, "scenario_decision_data.xlsx")
 if (recalculate_voi){
 
     actual_cea_values_in_tidal_scenario <- (
@@ -1294,14 +1320,30 @@ if (recalculate_voi){
           complete_scenario_data_path
       )
 
+    # Write out the decision summary dataset as well for use in single plot of result
+    combined_decision_rate_values <- decision_summary_in_price_scenario |>
+      lapply(dplyr::bind_rows) |>
+      dplyr::bind_rows()
+
+    combined_decision_rate_values |>
+      writexl::write_xlsx(
+        scenario_decision_rate_data_path
+      )
+
     } else {
+    # Pull in the full scenario data generate
     full_scenario_voi_data <- readxl::read_excel(
         complete_scenario_data_path
     )
+
+    # Pull in the decision rates data
+    combined_decision_rate_values <- readxl::read_excel(
+      scenario_decision_rate_data_path
+    )
 }
 
-if (redo_voi_outcome_plots){
-    #
+if (redo_voi_outcome_plots) {
+
     perfect_information_long_form <- full_scenario_voi_data |>
         dplyr::filter(`Cattle revenue ($ / He / yr)` == cattle_revenue_per_hectare_per_year) |>
         dplyr::select(
@@ -1344,6 +1386,7 @@ if (redo_voi_outcome_plots){
 
     value_per_year_expression <- expression(paste("Value of information ($ yr"^-1, ")"))
 
+    # Key trend / comparison line plot figure - currently figure 6 in paper
     value_of_information_plot_from_results <- combined_cases_scenario_evaluation_prettier |>
         ggplot2::ggplot(ggplot2::aes(
             x = `Carbon price ($ / tonne)`,
@@ -1364,9 +1407,16 @@ if (redo_voi_outcome_plots){
         ) +
         viridis::scale_color_viridis(discrete = TRUE)
 
-
+    # Standard save
     value_of_information_scenario_path <- file.path(figures_dir, "output_voi_evaluation.png")
     ggsave(value_of_information_scenario_path, value_of_information_plot_from_results)
+
+    # Tiff version save with explicit dpi setting for paper
+    value_of_information_scenario_tiff_path <- file.path(figures_dir, "output_voi_evaluation.tiff")
+    ggsave(value_of_information_scenario_tiff_path,
+           value_of_information_plot_from_results,
+           dpi = 300,
+           width = 13)
 
     long_form_voi_data_path <- file.path(synthesised_data_dir, "voi_long_form.xlsx")
     combined_cases_scenario_evaluation_prettier |>
@@ -1374,9 +1424,11 @@ if (redo_voi_outcome_plots){
 
     # Now think about how to do a good comparison at different cattle revenues
     # Weighted % of time carbon use is better than cattle
-    combined_decision_rate_values <- decision_summary_in_price_scenario |>
-        lapply(dplyr::bind_rows) |>
-        dplyr::bind_rows()
+    # combined_decisions_rates should come from loaded saved local results of previous step
+
+    # combined_decision_rate_values <- decision_summary_in_price_scenario |>
+    #     lapply(dplyr::bind_rows) |>
+    #     dplyr::bind_rows()
 
     targeted_decision_for_plot <- "Use for carbon sequestration"
 
