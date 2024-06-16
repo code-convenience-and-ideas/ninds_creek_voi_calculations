@@ -39,6 +39,13 @@ The below datasets are needed for reproducing the analysis and are the data used
     tweak some of the parameters of the analysis.
 
 
+## Licensing
+Please note, the author's of this repository does not own and cannot license the data-sets used.
+
+The BlueCam based datasets depend the licensing of the BlueCam calculator, report and methodology.
+
+Any licensing mentioned for this repository is to do with the code provided.
+
 ## Notes on the approach taken.
 ### Methods
 
