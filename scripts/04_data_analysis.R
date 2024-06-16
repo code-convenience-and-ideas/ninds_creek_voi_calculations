@@ -269,7 +269,6 @@ bluecam_climate_sheet_to_stpi <- c(
 
 stpi_climate <- bluecam_climate_sheet_to_stpi[[target_blue_cam_sheet]]
 
-
 # Read in the description of the tidal areas
 land_use_area_path <- file.path(manualdata_dir, "CEA_LandUseAreas.xlsx")
 land_use_area_data <- readxl::read_excel(land_use_area_path)

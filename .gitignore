@@ -12,6 +12,7 @@
 **/communications/*
 **/reports/*.pdf
 **/data/*
+**/documentaton/*.pdf
 
 # Some exceptions to these folders is empty gitkeep file
 !figures/.gitkeep
@@ -20,8 +21,7 @@
 !other/.gitkeep
 !communications/.gitkeep
 
-# Essentially, what should get version controlled is communications, and scripts. Comms are binary files but static. Scripts are text and indexable.
-
+# Essentially, what should get version controlled is the scripts and the overall folder structure for the project.
 
 ## Extra gitignore options from https://www.toptal.com/developers/gitignore
 ### R ###
